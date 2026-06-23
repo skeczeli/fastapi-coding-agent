@@ -1,0 +1,28 @@
+# Agent policy config — validated before EVERY tool call (#A3 engine).
+# This is the example/default; the real target-repo config is set in #E1.
+
+# Root the agent is confined to for writes/commands. TP1 lesson: confining to a
+# workspace (not just string-matching dangerous commands) is what actually
+# prevents bypasses like shutil.rmtree.
+workspace: "./workspace"
+
+read:
+  deny:
+    - ".env"
+    - ".env.*"
+    - "**/secrets/**"
+
+write:
+  deny:
+    - ".git/**"
+    - "**/*.lock"
+
+commands:
+  deny:
+    - "rm -rf*"
+    - "sudo*"
+    - ":(){*"          # fork bomb
+  require_approval:
+    - "git push*"
+    - "pip install*"
+    - "rm *"
