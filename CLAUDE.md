@@ -35,6 +35,7 @@ Multi-agent AI coding agent **specialized in FastAPI**, evolved from an in-class
 ## Commits & PRs
 
 - Branch off `main`; keep PRs scoped to a single issue where possible. Reference the issue by its backlog ID (e.g. `#A1`) and/or GitHub number.
+- **Small commits — one unit of change each.** Commit each logical step on its own (e.g. "scaffold packaging", "add TaskState contract", "add tool registry") rather than batching unrelated changes. Each commit should build/import cleanly on its own.
 
 ## Where to start
 
