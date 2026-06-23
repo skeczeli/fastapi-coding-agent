@@ -54,6 +54,17 @@ The full work breakdown — issues, dependencies, and who owns what — lives in
 
 **Start here:** issue **#0 (foundation + contracts)** unblocks all parallel work — it must be merged first.
 
+### Dev setup
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"      # core + pytest; add ".[rag]" / ".[web]" / ".[obs]" per lane
+AGENT_LLM_MOCK=1 pytest -q   # smoke tests, no API key needed
+```
+
+Optional dependency groups keep core installs light: `rag` (Chroma + tiktoken),
+`web` (Tavily), `obs` (Langfuse). Install only what your lane needs.
+
 ## Team
 
 Three developers. See the ownership table in `BACKLOG.md` for lane assignments.

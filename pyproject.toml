@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fastapi-coding-agent"
+version = "0.1.0"
+description = "Multi-agent AI coding agent specialized in FastAPI, built on a hand-written harness (no orchestration frameworks)."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=1.40",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+rag = [
+    "chromadb>=0.5",
+    "tiktoken>=0.7",
+]
+web = [
+    "tavily-python>=0.5",
+]
+obs = [
+    "langfuse>=2.0",
+]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["agent*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
