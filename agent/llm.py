@@ -47,6 +47,24 @@ class LLMResponse:
 
 _client = None
 
+# Optional FIFO queue of canned responses for mock mode. Lets tests drive a
+# multi-step agent loop (e.g. the orchestrator calling subagents in sequence)
+# deterministically without an API key. ``None`` → fall back to the echo mock.
+_mock_script: list["LLMResponse"] | None = None
+
+
+def set_mock_script(responses: list["LLMResponse"] | None) -> None:
+    """Queue canned ``LLMResponse``s consumed (FIFO) by mock mode.
+
+    Each ``complete()`` call in mock mode pops the next scripted response; once
+    the queue is empty it reverts to the default echo behaviour. Pass ``None``
+    to clear the script. Tests must clear it when done (an autouse fixture does
+    this) so a script can't leak into other tests — same global-state hazard as
+    the tool registry.
+    """
+    global _mock_script
+    _mock_script = list(responses) if responses is not None else None
+
 
 def _get_client():
     """Lazily build the OpenAI client so importing this module needs no API key."""
@@ -59,7 +77,13 @@ def _get_client():
 
 
 def _mock_response(messages: list[dict], tools: list[dict] | None) -> LLMResponse:
-    """Deterministic stand-in used when AGENT_LLM_MOCK is set."""
+    """Deterministic stand-in used when AGENT_LLM_MOCK is set.
+
+    Pops the next scripted response if one was queued via ``set_mock_script``;
+    otherwise echoes the last message so simple smoke tests still work.
+    """
+    if _mock_script:
+        return _mock_script.pop(0)
     last = messages[-1]["content"] if messages else ""
     return LLMResponse(content=f"[mock] received: {last}", tool_calls=[], raw=None)
 
