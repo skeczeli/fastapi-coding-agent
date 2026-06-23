@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 
-from agent import llm, tools
+from agent import context, llm, tools
 from agent.state import TaskState
 
 
@@ -55,9 +55,24 @@ def run_loop(
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_msg},
     ]
-    schemas = tools.schemas([t.name for t in tool_list]) if tool_list else None
+    # Dispatch over the tools this loop was handed, not the global registry.
+    # This is what actually enforces a subagent's allowed-tools subset (the LLM
+    # can't reach a tool outside ``tool_list``) and lets transient tools — like
+    # the orchestrator's subagent-as-tool adapters — work without being
+    # registered globally. NOTE(#A1, Dev 2): adopt this when hardening; the
+    # signature is unchanged, only resolution moved from name→registry to object.
+    by_name = {t.name: t for t in tool_list}
+    schemas = tools.schemas_for(tool_list) if tool_list else None
+
+    # Per-call outcome digests for *this* loop — the loop-detection signal
+    # ("same call → same result"). Kept local on purpose: ``state.observations``
+    # is shared across every subagent, so feeding it whole to detect_loop would
+    # mix runs and invite cross-agent false positives.
+    observations: list[str] = []
 
     for _ in range(max_iters):
+        # Keep the working context small (no-op until #C7, Dev 3).
+        messages = context.summarize_history(messages)
         resp = llm.complete(messages, tools=schemas)
 
         if not resp.tool_calls:
@@ -80,13 +95,26 @@ def run_loop(
         )
 
         for call in resp.tool_calls:
-            tool = tools.get(call.name)
-            denied = _check_policy(tool, call.arguments)
-            if denied is not None:
-                result = f"[policy] denied: {denied}"
+            tool = by_name.get(call.name)
+            if tool is None:
+                # Outside this loop's allowed toolset — refuse instead of
+                # falling through to the global registry.
+                result = f"[harness] unknown tool: {call.name}"
             else:
-                result = tool.execute(call.arguments)
+                denied = _check_policy(tool, call.arguments)
+                if denied is not None:
+                    result = f"[policy] denied: {denied}"
+                else:
+                    result = tool.execute(call.arguments)
             messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
+            observations.append(f"{call.name}: {result[:200]}")
+
+        # Bail out of a no-progress loop instead of burning iterations (no-op
+        # until #C7, Dev 3). NOTE(#A1): this and the summarize call above are the
+        # context-management hook points #C7 fills in once it lands.
+        if context.detect_loop(observations):
+            state.note("run_loop stopped: no-progress loop detected")
+            return "[harness] stopped: no progress (loop detected)"
 
     state.note(f"run_loop hit max_iters={max_iters}")
     return "[harness] stopped: reached max iterations"
