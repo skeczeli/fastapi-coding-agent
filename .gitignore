@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Environment / secrets
+.env
+.env.local
+
+# RAG artifacts (vector store + ingested corpus are fetched/built locally)
+.chroma/
+chroma_db/
+docs/fastapi/
+
+# OS
+.DS_Store
