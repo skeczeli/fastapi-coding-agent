@@ -73,6 +73,19 @@ def test_long_section_splits_with_overlap():
     assert tail == head
 
 
+def test_heading_anchor_ids_are_stripped():
+    # FastAPI headings carry explicit anchor ids; they must not leak into the
+    # breadcrumb (embedded text) or the section metadata.
+    text = "# Request Body { #request-body }\n\nUse a Pydantic model.\n"
+    sections = ingest._iter_sections(text)
+    crumbs = [c for c, _ in sections]
+    assert "Request Body" in crumbs
+    assert all("{" not in c for c in crumbs)
+
+    chunks = ingest.chunk_markdown(text, source="body.md")
+    assert all("{" not in c.section for c in chunks)
+
+
 def test_short_text_stays_single_chunk():
     import tiktoken
 

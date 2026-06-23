@@ -42,6 +42,9 @@ MAX_TOKENS = 800  # target ceiling per chunk (ticket suggests ~500–1000)
 OVERLAP = 100  # token overlap between windows of an over-long section
 
 _HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
+# FastAPI headings carry explicit anchor ids, e.g. "Request Body { #request-body }".
+# Strip them so breadcrumbs (embedded text + ``section`` metadata) read cleanly.
+_ANCHOR = re.compile(r"\s*\{\s*#[^}]*\}")
 
 
 @dataclass
@@ -120,7 +123,7 @@ def _iter_sections(text: str) -> list[tuple[str, str]]:
         if m:
             flush()  # close the previous section before opening a new one
             level = len(m.group(1))
-            title = m.group(2).strip()
+            title = _ANCHOR.sub("", m.group(2)).strip()
             while stack and stack[-1][0] >= level:
                 stack.pop()
             stack.append((level, title))
