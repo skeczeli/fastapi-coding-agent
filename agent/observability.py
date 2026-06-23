@@ -8,6 +8,7 @@ spans/logs *before* Langfuse is wired. The real Langfuse-backed tracer is #B4
 from __future__ import annotations
 
 from contextlib import contextmanager
+from contextlib import AbstractContextManager
 from typing import Iterator, Protocol, runtime_checkable
 
 
@@ -15,7 +16,7 @@ from typing import Iterator, Protocol, runtime_checkable
 class Tracer(Protocol):
     """Minimal tracing surface other modules instrument against."""
 
-    def span(self, name: str, **attrs) -> "Iterator[None]":
+    def span(self, name: str, **attrs) -> AbstractContextManager[None]:
         """Context manager wrapping a unit of work (LLM call, tool, retrieval)."""
         ...
 
