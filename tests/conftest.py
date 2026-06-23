@@ -6,7 +6,7 @@ os.environ.setdefault("AGENT_LLM_MOCK", "1")  # never hit the real API in tests
 
 import pytest
 
-from agent import tools
+from agent import llm, tools
 
 
 @pytest.fixture(autouse=True)
@@ -22,3 +22,16 @@ def isolate_tool_registry():
     finally:
         tools._REGISTRY.clear()
         tools._REGISTRY.update(snapshot)
+
+
+@pytest.fixture(autouse=True)
+def clear_mock_script():
+    """Clear any queued LLM mock script after each test.
+
+    Same global-state hazard as the registry: a leftover script would feed
+    canned responses into unrelated tests.
+    """
+    try:
+        yield
+    finally:
+        llm.set_mock_script(None)
