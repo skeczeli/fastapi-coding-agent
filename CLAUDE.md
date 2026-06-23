@@ -19,7 +19,7 @@ Multi-agent AI coding agent **specialized in FastAPI**, evolved from an in-class
 
 ## Architecture (target)
 
-- **Orchestrator** — main agent; owns the shared `TaskState`; coordinates subagents via the *agents-as-tools* pattern (its "tools" are the subagents). May call base tools directly.
+- **Orchestrator** — main agent; owns the shared `TaskState`; coordinates subagents via the *agents-as-tools* pattern (its "tools" are the subagents). It delegates rather than acting directly; calling base tools itself is a future extension (#C1 ships delegation-only, since base tools enforce permission per-subagent).
 - **Subagents** — Explorer (understands the repo), Researcher (RAG + web), Implementer (writes code), Tester (runs checks), Reviewer (validates the diff vs. the request). Each is its own harness loop with a specific prompt and a subset of tools/permissions.
 - **The harness loop is the shared primitive** — one reusable `run_loop(prompt, tools, state)` used by the orchestrator *and* every subagent. Defined in #0, hardened in #A1.
 - **Shared state** (`TaskState`): original request, plan, progress, per-subagent results, sources consulted, files modified, observations.
