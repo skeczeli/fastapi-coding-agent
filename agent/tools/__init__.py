@@ -57,6 +57,18 @@ def all_tools() -> list[Tool]:
     return list(_REGISTRY.values())
 
 
+def _schema(t: Tool) -> dict:
+    """One tool's OpenAI tool-calling schema."""
+    return {
+        "type": "function",
+        "function": {
+            "name": t.name,
+            "description": t.description,
+            "parameters": t.parameters,
+        },
+    }
+
+
 def schemas(names: list[str] | None = None) -> list[dict]:
     """Return tool schemas in OpenAI tool-calling format.
 
@@ -65,17 +77,18 @@ def schemas(names: list[str] | None = None) -> list[dict]:
             ``None`` returns all registered tools.
     """
     tools = all_tools() if names is None else [get(n) for n in names]
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": t.name,
-                "description": t.description,
-                "parameters": t.parameters,
-            },
-        }
-        for t in tools
-    ]
+    return [_schema(t) for t in tools]
+
+
+def schemas_for(tool_list: list[Tool]) -> list[dict]:
+    """Build schemas straight from tool *objects*, bypassing the registry.
+
+    The harness/orchestrator hand a loop its exact tool set (a subagent's
+    allowed subset, or per-run subagent-as-tool adapters). Resolving those by
+    name through the global registry would force every transient tool to be
+    registered; building from the objects keeps each loop's toolset local.
+    """
+    return [_schema(t) for t in tool_list]
 
 
 # Import base tools at the bottom (after register/get exist) so they self-register
