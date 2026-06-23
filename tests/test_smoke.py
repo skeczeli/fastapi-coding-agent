@@ -34,7 +34,7 @@ def test_base_tools_registered():
 
 
 def test_tool_schemas_openai_shape():
-    schema = tools.schemas(["read_file"])[0]
+    schema = tools.schemas([tools.get("read_file")])[0]
     assert schema["type"] == "function"
     assert schema["function"]["name"] == "read_file"
 

@@ -62,7 +62,7 @@ def run_loop(
     # registered globally. NOTE(#A1, Dev 2): adopt this when hardening; the
     # signature is unchanged, only resolution moved from name→registry to object.
     by_name = {t.name: t for t in tool_list}
-    schemas = tools.schemas_for(tool_list) if tool_list else None
+    schemas = tools.schemas(tool_list) if tool_list else None
 
     # Per-call outcome digests for *this* loop — the loop-detection signal
     # ("same call → same result"). Kept local on purpose: ``state.observations``
