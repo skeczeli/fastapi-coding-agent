@@ -76,3 +76,8 @@ def schemas(names: list[str] | None = None) -> list[dict]:
         }
         for t in tools
     ]
+
+
+# Import base tools at the bottom (after register/get exist) so they self-register
+# whenever the tools package is imported. Kept last to avoid a circular import.
+from agent.tools import base as base  # noqa: E402,F401
