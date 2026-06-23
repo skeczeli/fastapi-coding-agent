@@ -70,6 +70,12 @@ def _get_client():
     """Lazily build the OpenAI client so importing this module needs no API key."""
     global _client
     if _client is None:
+        from dotenv import load_dotenv  # load .env here, not at import time
+
+        # Pull OPENAI_API_KEY from .env so every entrypoint (orchestrator, CLI,
+        # #I1) works without the caller remembering to load it. No-op if the key
+        # is already in the environment; never reached in mock mode.
+        load_dotenv()
         from openai import OpenAI  # imported lazily; core import stays light
 
         _client = OpenAI()
