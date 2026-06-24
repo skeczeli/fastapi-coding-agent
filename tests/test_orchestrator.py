@@ -27,6 +27,25 @@ def _text(content: str) -> llm.LLMResponse:
     return llm.LLMResponse(content=content, tool_calls=[])
 
 
+class _StubSubagent:
+    """A subagent that records a result without calling the LLM.
+
+    Keeps the orchestrator tests isolated from real subagent implementations:
+    the scripted mock LLM is a shared FIFO, so a *real* subagent (e.g. the
+    Implementer, #C3) running its own loop would consume the orchestrator's
+    scripted turns. Stubs honour the test's stated intent ("no real subagents").
+    """
+
+    def __init__(self, name: str):
+        self.name = name
+        self.allowed_tools: list[str] = []
+
+    def run(self, state: TaskState, task: str) -> str:
+        result = f"[{self.name}] handled: {task}"
+        state.subagent_results[self.name] = result
+        return result
+
+
 def test_subagent_tool_adapts_protocol_and_shares_state():
     state = TaskState(request="req")
     explorer = default_subagents()[0]
@@ -54,7 +73,13 @@ def test_orchestrator_runs_full_subagent_sequence():
         ]
     )
 
-    state = orchestrator.run("add a POST /users endpoint")
+    # Inject pure stubs so only the orchestrator's loop consumes the script
+    # (real subagents would pop their own LLM turns off the shared FIFO).
+    roster = [
+        _StubSubagent(n)
+        for n in ("explorer", "researcher", "implementer", "tester", "reviewer")
+    ]
+    state = orchestrator.run("add a POST /users endpoint", subagents=roster)
 
     # Every subagent ran and recorded a result on the shared state.
     for name in ("explorer", "researcher", "implementer", "tester", "reviewer"):
