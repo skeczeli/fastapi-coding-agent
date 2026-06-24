@@ -89,10 +89,9 @@ Set up the repo and define the interfaces everyone codes against. Best done as a
 
 ## Lane A — Harness, tools & safety  *(#A1/#A2 → Dev 2; #A3/#A4 → Dev 3)*
 
-### #A1 · Port & refactor the harness loop
+### #A1 · Outer conversation loop + REPL (port the in-class harness)
 **Depends on:** #0 · **Labels:** `harness`, `lane-a`
-Refactor the in-class notebook harness into `harness.py`: inner loop (run tools until the LLM finishes its turn) + outer loop (interactive conversation, history kept between turns). Uses `llm.py` + the tool registry.
-> *This is where the pinned "lift vs. merge" decision gets resolved — pick which existing source to port in here.*
+The **inner loop** already exists in `harness.py` (`run_loop`, provisional from #0): asks the LLM, dispatches tool calls **by object** (enforces each agent's allowed-tools subset), feeds results back, stops on completion or `max_iters`. Do **not** rewrite its signature, the object dispatch, or the policy/context hook points — those are #0 contracts. This ticket adds what's missing around it: outer conversation loop (history kept between user turns), a `python -m agent` REPL wiring real LLM + tools, the port of the in-class (TP1) harness (resolves the pinned "lift vs. merge" decision), and removing the PROVISIONAL caveat. Leave the seams marked for #A4 (plan/supervision modes), #C7 (`summarize_history`/`detect_loop`, already placed), and #A3 (`_check_policy`, already called).
 **Acceptance:** can run a base tool end-to-end in a REPL; conversation persists across turns; max-iteration cap to prevent infinite loops.
 
 ### #A2 · Implement the 5 base tools
