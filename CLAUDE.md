@@ -9,7 +9,7 @@ Multi-agent AI coding agent **specialized in FastAPI**, evolved from an in-class
 ## Hard constraints (from the assignment — do not violate)
 
 - **No agent-orchestration frameworks.** No LangChain, LangGraph, CrewAI, AutoGen, or similar. The harness and agent coordination are hand-written. Point libraries for embeddings, vector storage, web search, observability, and CLI are allowed.
-- **Build on the in-class harness.** Keep the base harness and base tools (read/write/run/list/web_search); evolve, don't discard.
+- **Build on the in-class harness.** Keep the base harness and base tools (read/write/run/list/web_search); evolve, don't discard. The base agent this is built on lives in the in-class TP notebook: https://colab.research.google.com/drive/1m47p4bq8EEAD16-tXPDld0nnHBUU5ilg?usp=sharing
 - **Every tool call is validated** against `agent.config.yaml` policies before execution.
 - **RAG first, web second.** Consult the RAG over FastAPI docs before deciding; fall back to web search only when evidence is insufficient. Always surface which sources were used and label info origin (repo / memory / RAG / web / inference).
 

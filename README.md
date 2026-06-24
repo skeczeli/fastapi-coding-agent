@@ -8,6 +8,12 @@ A multi-agent AI coding agent **specialized in FastAPI**, built on top of the ha
 
 The in-class TP was a single agent: a harness loop (LLM ↔ tools) with plan mode, supervision, and guardrails. This final project evolves it into a **team of specialized agents** coordinated by a main orchestrator, grounded in real FastAPI documentation via RAG.
 
+## Starting point (base from the in-class TP)
+
+This project is built **on top of** the coding agent developed in the in-class TP. That base agent — the original harness loop and base tools — lives in the Colab notebook below and is the foundation everything here evolves from:
+
+- 📓 **Base notebook (Colab):** https://colab.research.google.com/drive/1m47p4bq8EEAD16-tXPDld0nnHBUU5ilg?usp=sharing
+
 ## What it adds over the in-class TP
 
 - **Multi-agent architecture** — an orchestrator that coordinates 5 subagents (Explorer, Researcher, Implementer, Tester, Reviewer) over a shared task state.
