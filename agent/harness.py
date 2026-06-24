@@ -1,78 +1,76 @@
 """The shared harness loop — the one primitive the orchestrator and every subagent reuse.
 
-⚠️  PROVISIONAL / NOT FINAL.  This is the *minimal* loop defined in #0 only to
-    unblock #C1 (orchestrator) and let lanes code against a real signature. The
-    production harness — history management between turns, supervision/plan
-    modes, refactor of the TP1 notebook loop — is **#A1 (Dev 2)** and will
-    replace the body below. Do not build heavy logic on top of it; build on the
-    *signature* of ``run_loop``.
+Two nested loops (the in-class TP model, ported here in #A1):
 
-``run_loop`` drives one agent turn: ask the LLM, and while it requests tools,
-validate each call against policy, execute it, feed the result back, and repeat
-until the LLM stops asking or ``max_iters`` is hit (the cap prevents infinite
-loops — a TP1 lesson).
+- **Inner loop** (``run_loop`` / ``_drive``): one agent turn. Ask the LLM, and
+  while it requests tools, validate each call against policy, execute it, feed the
+  result back, and repeat until the LLM stops asking or ``max_iters`` is hit (the
+  cap prevents infinite loops — a TP1 lesson).
+- **Outer loop** (``converse``): the conversation across user turns. It keeps a
+  single growing message history so the user can follow up, correct, or switch
+  tasks without losing what the agent already did. ``python -m agent`` wires this
+  to the real LLM + the base tools.
+
+Both share ``_drive`` so the tool-dispatch logic lives in one place. ``run_loop``'s
+signature, the by-object dispatch, and the policy/context hook points are #0
+contracts — unchanged here.
 """
 
 from __future__ import annotations
 
 import json
+from typing import Callable
 
 from agent import context, llm, tools
 from agent.state import TaskState
+
+# Default role prompt for the single-agent REPL (the ported in-class harness).
+# The orchestrator has its own prompt; this one drives a lone agent with the five
+# base tools, as in TP1.
+SINGLE_AGENT_PROMPT = """You are a coding agent that resolves tasks by using tools.
+You can read and write files, run shell commands, list directories, and search the
+web. Work step by step: inspect what you need, make the change, and verify it (run
+tests or commands) before reporting back. When the task is done, reply with a short
+summary and stop calling tools."""
 
 
 def _check_policy(tool: tools.Tool, args: dict) -> str | None:
     """Validate a tool call before execution. Returns an error string if denied.
 
     TODO(#A3): real policy engine (deny globs, workspace confinement,
-    require-approval). Stub for #0 — always allows.
+    require-approval). Stub for now — always allows.
     """
     return None
 
 
-def run_loop(
-    system_prompt: str,
-    tool_list: list[tools.Tool],
+def _drive(
+    messages: list[dict],
+    by_name: dict[str, tools.Tool],
+    schemas: list[dict] | None,
     state: TaskState,
-    user_msg: str,
-    max_iters: int = 25,
+    max_iters: int,
 ) -> str:
-    """Run the agent loop until the LLM finishes its turn or hits the cap.
+    """Inner loop: run tools over ``messages`` until the LLM gives a final answer.
 
-    PROVISIONAL primitive (see module docstring) — hardened in #A1.
+    Mutates ``messages`` in place (so the outer ``converse`` loop keeps the full
+    turn in its persistent history) and returns the LLM's final text — or a
+    ``"[harness] stopped: ..."`` sentinel when it hits the iteration cap or a
+    no-progress loop.
 
-    Args:
-        system_prompt: Role/instructions for this agent.
-        tool_list: Tools this agent is allowed to call.
-        state: Shared task state (read/written by tools and the loop).
-        user_msg: The task/message that kicks off the turn.
-        max_iters: Hard cap on tool-call iterations.
-
-    Returns:
-        The LLM's final text response.
+    Dispatch is by *object*: only tools in ``by_name`` are reachable, which is what
+    enforces an agent's allowed-tools subset and lets transient tools (the
+    orchestrator's subagent-as-tool adapters) work without global registration.
     """
-    messages: list[dict] = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_msg},
-    ]
-    # Dispatch over the tools this loop was handed, not the global registry.
-    # This is what actually enforces a subagent's allowed-tools subset (the LLM
-    # can't reach a tool outside ``tool_list``) and lets transient tools — like
-    # the orchestrator's subagent-as-tool adapters — work without being
-    # registered globally. NOTE(#A1, Dev 2): adopt this when hardening; the
-    # signature is unchanged, only resolution moved from name→registry to object.
-    by_name = {t.name: t for t in tool_list}
-    schemas = tools.schemas(tool_list) if tool_list else None
-
-    # Per-call outcome digests for *this* loop — the loop-detection signal
+    # Per-call outcome digests for *this* turn — the loop-detection signal
     # ("same call → same result"). Kept local on purpose: ``state.observations``
     # is shared across every subagent, so feeding it whole to detect_loop would
     # mix runs and invite cross-agent false positives.
     observations: list[str] = []
 
     for _ in range(max_iters):
-        # Keep the working context small (no-op until #C7, Dev 3).
-        messages = context.summarize_history(messages)
+        # Keep the working context small (no-op until #C7). Assign back in place
+        # so a summarized history propagates to the caller's persistent list.
+        messages[:] = context.summarize_history(messages)
         resp = llm.complete(messages, tools=schemas)
 
         if not resp.tool_calls:
@@ -95,6 +93,8 @@ def run_loop(
         )
 
         for call in resp.tool_calls:
+            # SEAM(#A4): plan/supervision modes hook in here — confirm a write/
+            # command (or show a plan) before the call runs. Read-only tools pass.
             tool = by_name.get(call.name)
             if tool is None:
                 # Outside this loop's allowed toolset — refuse instead of
@@ -110,11 +110,82 @@ def run_loop(
             observations.append(f"{call.name}: {result[:200]}")
 
         # Bail out of a no-progress loop instead of burning iterations (no-op
-        # until #C7, Dev 3). NOTE(#A1): this and the summarize call above are the
-        # context-management hook points #C7 fills in once it lands.
+        # until #C7). This and the summarize call above are the context-management
+        # hook points #C7 fills in once it lands.
         if context.detect_loop(observations):
             state.note("run_loop stopped: no-progress loop detected")
             return "[harness] stopped: no progress (loop detected)"
 
     state.note(f"run_loop hit max_iters={max_iters}")
     return "[harness] stopped: reached max iterations"
+
+
+def run_loop(
+    system_prompt: str,
+    tool_list: list[tools.Tool],
+    state: TaskState,
+    user_msg: str,
+    max_iters: int = 25,
+) -> str:
+    """Run one agent turn until the LLM finishes or hits the cap.
+
+    The inner loop primitive reused by the orchestrator and every subagent. Builds
+    a fresh message history from ``system_prompt`` + ``user_msg`` and drives it to
+    a final answer. For a persistent multi-turn chat, use ``converse``.
+
+    Args:
+        system_prompt: Role/instructions for this agent.
+        tool_list: Tools this agent is allowed to call (dispatch is restricted to these).
+        state: Shared task state (read/written by tools and the loop).
+        user_msg: The task/message that kicks off the turn.
+        max_iters: Hard cap on tool-call iterations.
+
+    Returns:
+        The LLM's final text response (or a ``"[harness] stopped: ..."`` sentinel).
+    """
+    messages: list[dict] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_msg},
+    ]
+    by_name = {t.name: t for t in tool_list}
+    schemas = tools.schemas(tool_list) if tool_list else None
+    return _drive(messages, by_name, schemas, state, max_iters)
+
+
+def converse(
+    tool_list: list[tools.Tool],
+    state: TaskState,
+    system_prompt: str = SINGLE_AGENT_PROMPT,
+    max_iters: int = 25,
+    input_fn: Callable[[str], str] = input,
+    output_fn: Callable[[str], None] = print,
+) -> None:
+    """Outer conversation loop — the interactive REPL core.
+
+    Seeds one system prompt, then for each user message runs the inner loop over
+    the *same* growing ``messages`` list, so context (and everything the agent did)
+    persists between turns. Returns when the user sends EOF or an exit command.
+
+    ``input_fn``/``output_fn`` are injected (default stdin/stdout) so the loop can
+    be driven in tests without a real terminal.
+    """
+    messages: list[dict] = [{"role": "system", "content": system_prompt}]
+    by_name = {t.name: t for t in tool_list}
+    schemas = tools.schemas(tool_list) if tool_list else None
+
+    while True:
+        try:
+            user = input_fn("you> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            output_fn("")
+            return
+        if user.lower() in {"exit", "quit", ":q"}:
+            return
+        if not user:
+            continue
+
+        messages.append({"role": "user", "content": user})
+        reply = _drive(messages, by_name, schemas, state, max_iters)
+        # Keep the assistant's final text in history so follow-ups have context.
+        messages.append({"role": "assistant", "content": reply})
+        output_fn(reply)
