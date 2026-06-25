@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 
 from agent import harness, tools
+from agent.modes import HarnessMode
 from agent.state import TaskState
 
 
@@ -38,10 +39,12 @@ def main() -> None:
     state = TaskState(request="(interactive session)")
     # all_tools() returns the base tools, which self-register on import.
     tool_list = tools.all_tools()
+    mode = HarnessMode()
 
     print("FastAPI coding agent — interactive harness. Type 'exit' to quit.")
-    print(f"Tools available: {', '.join(t.name for t in tool_list)}\n")
-    harness.converse(tool_list, state)
+    print(f"Tools available: {', '.join(t.name for t in tool_list)}")
+    print("Toggle modes: /plan, /supervision\n")
+    harness.converse(tool_list, state, mode=mode)
 
 
 if __name__ == "__main__":
