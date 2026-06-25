@@ -182,3 +182,62 @@ class TestWorkspaceConfinement:
         tool = _StubTool(permission="read")
         result = check(tool, {"path": "/some/other/file.py"}, cfg)
         assert result is None
+
+
+class TestCommandDeny:
+    def test_denies_rm_rf(self):
+        from agent.policy import check
+
+        cfg = _config(commands=PolicyConfig(deny=["rm -rf*"]))
+        tool = _StubTool(permission="command")
+        result = check(tool, {"command": "rm -rf /"}, cfg)
+        assert result is not None
+        assert "rm -rf" in result
+
+    def test_denies_sudo(self):
+        from agent.policy import check
+
+        cfg = _config(commands=PolicyConfig(deny=["sudo*"]))
+        tool = _StubTool(permission="command")
+        result = check(tool, {"command": "sudo apt install foo"}, cfg)
+        assert result is not None
+
+    def test_denies_chained_with_and(self):
+        from agent.policy import check
+
+        cfg = _config(commands=PolicyConfig(deny=["rm -rf*"]))
+        tool = _StubTool(permission="command")
+        result = check(tool, {"command": "cd /tmp && rm -rf /"}, cfg)
+        assert result is not None
+
+    def test_denies_chained_with_semicolon(self):
+        from agent.policy import check
+
+        cfg = _config(commands=PolicyConfig(deny=["rm -rf*"]))
+        tool = _StubTool(permission="command")
+        result = check(tool, {"command": "echo hi; rm -rf /"}, cfg)
+        assert result is not None
+
+    def test_denies_chained_with_pipe(self):
+        from agent.policy import check
+
+        cfg = _config(commands=PolicyConfig(deny=["sudo*"]))
+        tool = _StubTool(permission="command")
+        result = check(tool, {"command": "cat file | sudo tee /etc/x"}, cfg)
+        assert result is not None
+
+    def test_allows_safe_command(self):
+        from agent.policy import check
+
+        cfg = _config(commands=PolicyConfig(deny=["rm -rf*", "sudo*"]))
+        tool = _StubTool(permission="command")
+        result = check(tool, {"command": "echo hello"}, cfg)
+        assert result is None
+
+    def test_denies_fork_bomb(self):
+        from agent.policy import check
+
+        cfg = _config(commands=PolicyConfig(deny=[":(){*"]))
+        tool = _StubTool(permission="command")
+        result = check(tool, {"command": ":(){ :|:& };:"}, cfg)
+        assert result is not None
