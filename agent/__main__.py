@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 
-from agent import harness, tools
+from agent import harness, observability, tools
 from agent.modes import HarnessMode
 from agent.state import TaskState
 
@@ -36,6 +36,10 @@ def main() -> None:
         )
         return
 
+    # Install the Langfuse tracer if LANGFUSE_* keys are set; else stays no-op.
+    tracer = observability.init_tracer()
+    tracing_on = not isinstance(tracer, observability.NoopTracer)
+
     state = TaskState(request="(interactive session)")
     # all_tools() returns the base tools, which self-register on import.
     tool_list = tools.all_tools()
@@ -43,8 +47,13 @@ def main() -> None:
 
     print("FastAPI coding agent — interactive harness. Type 'exit' to quit.")
     print(f"Tools available: {', '.join(t.name for t in tool_list)}")
+    print(f"Observability: {'Langfuse trace on' if tracing_on else 'off (no LANGFUSE keys)'}")
     print("Toggle modes: /plan, /supervision\n")
-    harness.converse(tool_list, state, mode=mode)
+    try:
+        harness.converse(tool_list, state, mode=mode)
+    finally:
+        # Flush buffered traces so the run shows up in Langfuse before exit.
+        observability.flush()
 
 
 if __name__ == "__main__":
