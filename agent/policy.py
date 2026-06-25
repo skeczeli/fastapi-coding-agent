@@ -7,6 +7,7 @@ require_approval. Returns None if allowed, or a reason string if denied.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Callable
 
 from agent.config import Config
@@ -57,6 +58,17 @@ def _path_matches_any(path: str, patterns: list[str]) -> str | None:
     return None
 
 
+def _is_within_workspace(path_str: str, workspace: str) -> bool:
+    """Check if the resolved path is inside the workspace directory."""
+    resolved = Path(path_str).resolve()
+    ws = Path(workspace).resolve()
+    try:
+        resolved.relative_to(ws)
+        return True
+    except ValueError:
+        return False
+
+
 def check(
     tool: Tool,
     args: dict,
@@ -74,5 +86,15 @@ def check(
             matched = _path_matches_any(path, config.read.deny)
             if matched:
                 return f"path matches read.deny pattern: {matched}"
+
+    elif tool.permission == "write":
+        path = args.get("path", "")
+        if path:
+            if config.write.deny:
+                matched = _path_matches_any(path, config.write.deny)
+                if matched:
+                    return f"path matches write.deny pattern: {matched}"
+            if not _is_within_workspace(path, config.workspace):
+                return f"path is outside workspace: {config.workspace}"
 
     return None
