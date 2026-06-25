@@ -134,3 +134,74 @@ def test_drive_supervision_allows_read_tool():
         supervision_fn=lambda _: False,  # would reject, but reads bypass
     )
     assert spy.calls == [{}]  # tool executed despite supervision_fn returning False
+
+
+# Plan mode tests
+
+
+def test_converse_plan_mode_approve_then_execute():
+    state = TaskState(request="x")
+    spy = _SpyTool()
+    mode = HarnessMode(plan_enabled=True)
+
+    llm.set_mock_script(
+        [
+            # Plan LLM call returns a plan
+            LLMResponse(content="1. Call spy tool"),
+            # Execution: LLM calls the tool, then gives final answer
+            LLMResponse(tool_calls=[ToolCall(id="1", name="spy", arguments={})]),
+            LLMResponse(content="done"),
+        ]
+    )
+
+    # input sequence: user msg, plan approval ("a"), then exit
+    inputs = iter(["do task", "a", "exit"])
+    outputs: list[str] = []
+
+    harness.converse(
+        [spy],
+        state,
+        mode=mode,
+        input_fn=lambda _p="": next(inputs),
+        output_fn=outputs.append,
+    )
+    assert spy.calls == [{}]  # tool executed after plan approved
+    assert any("Plan" in o for o in outputs)
+
+
+def test_converse_plan_mode_reject_skips_execution():
+    state = TaskState(request="x")
+    spy = _SpyTool()
+    mode = HarnessMode(plan_enabled=True)
+
+    llm.set_mock_script([LLMResponse(content="1. Call spy tool")])
+
+    inputs = iter(["do task", "r", "exit"])
+    outputs: list[str] = []
+
+    harness.converse(
+        [spy],
+        state,
+        mode=mode,
+        input_fn=lambda _p="": next(inputs),
+        output_fn=outputs.append,
+    )
+    assert spy.calls == []  # tool never ran
+
+
+def test_converse_toggle_commands():
+    state = TaskState(request="x")
+    mode = HarnessMode()
+    outputs: list[str] = []
+
+    harness.converse(
+        [],
+        state,
+        mode=mode,
+        input_fn=_feed("/plan", "/supervision"),
+        output_fn=outputs.append,
+    )
+    assert mode.plan_enabled is True
+    assert mode.supervision_enabled is True
+    assert any("plan mode" in o.lower() and "on" in o.lower() for o in outputs)
+    assert any("supervision mode" in o.lower() and "on" in o.lower() for o in outputs)

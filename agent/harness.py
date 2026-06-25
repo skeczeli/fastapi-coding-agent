@@ -22,7 +22,7 @@ import json
 from typing import Callable
 
 from agent import config as config_mod, context, llm, policy, tools
-from agent.modes import HarnessMode, check_supervision
+from agent.modes import HarnessMode, check_supervision, run_plan_approval
 from agent.state import TaskState
 
 # Default role prompt for the single-agent REPL (the ported in-class harness).
@@ -230,7 +230,37 @@ def converse(
         if not user:
             continue
 
+        # Toggle commands
+        if user == "/plan":
+            mode.plan_enabled = not mode.plan_enabled
+            status = "ON" if mode.plan_enabled else "OFF"
+            output_fn(f"Plan mode: {status}")
+            continue
+        if user == "/supervision":
+            mode.supervision_enabled = not mode.supervision_enabled
+            status = "ON" if mode.supervision_enabled else "OFF"
+            output_fn(f"Supervision mode: {status}")
+            continue
+
         messages.append({"role": "user", "content": user})
+
+        # Plan mode gate: get approval before executing
+        if mode:
+            plan_result = run_plan_approval(
+                user_msg=user,
+                messages=messages,
+                mode=mode,
+                output_fn=output_fn,
+                input_fn=input_fn,
+            )
+            if plan_result == "rejected":
+                output_fn("[plan] Rejected — skipping execution.")
+                messages.append({"role": "assistant", "content": "[plan rejected by user]"})
+                continue
+            if plan_result is not None:
+                # User modified: replace the user message with new instructions
+                messages[-1] = {"role": "user", "content": plan_result}
+
         reply = _drive(messages, by_name, schemas, state, max_iters, approval_fn, mode, supervision_fn)
         # Keep the assistant's final text in history so follow-ups have context.
         messages.append({"role": "assistant", "content": reply})
