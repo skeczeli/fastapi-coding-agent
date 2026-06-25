@@ -9,8 +9,29 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from agent import tools
+from agent import harness, tools
 from agent.state import TaskState
+
+
+EXPLORER_PROMPT = """\
+You are the Explorer in a multi-agent coding agent specialized in FastAPI.
+Your job is to understand a target repository's structure, architecture,
+dependencies, conventions, and identify files relevant to the task.
+
+Strategy:
+1. Start by calling ``list_files`` on the project root to see the top-level structure.
+2. Read key files: README, pyproject.toml, setup.py, requirements.txt, config files.
+3. Drill into source directories — list them, then read entry points and key modules.
+4. Identify naming conventions, patterns, and framework usage.
+5. Pay special attention to files relevant to the user's specific task.
+
+Your answer MUST be a structured summary with these sections:
+- **Project Overview**: what the project does, framework, language version.
+- **Structure**: directory layout with purpose of key directories.
+- **Architecture**: main components, entry points, data flow.
+- **Dependencies**: key libraries and their roles.
+- **Conventions**: naming patterns, project-specific idioms, test conventions.
+- **Relevant Files**: files most relevant to the user's task, with a short note on why."""
 
 
 @dataclass
@@ -48,7 +69,21 @@ class Explorer:
     name = "explorer"
     allowed_tools = ["read_file", "list_files"]
 
+    def _tools(self, state: TaskState) -> list[tools.Tool]:
+        resolved: list[tools.Tool] = []
+        for tool_name in self.allowed_tools:
+            tool = tools.get(tool_name)
+            if tool_name == "read_file":
+                tool = _RecordingReadFile(inner=tool, state=state)
+            resolved.append(tool)
+        return resolved
+
     def run(self, state: TaskState, task: str) -> str:
-        result = f"[explorer stub] would explore the repo for: {task}"
+        result = harness.run_loop(
+            system_prompt=EXPLORER_PROMPT,
+            tool_list=self._tools(state),
+            state=state,
+            user_msg=task,
+        )
         state.subagent_results[self.name] = result
         return result
