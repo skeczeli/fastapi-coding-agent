@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 from typing import Callable
 
-from agent import context, llm, tools
+from agent import config as config_mod, context, llm, policy, tools
 from agent.state import TaskState
 
 # Default role prompt for the single-agent REPL (the ported in-class harness).
@@ -34,13 +34,15 @@ tests or commands) before reporting back. When the task is done, reply with a sh
 summary and stop calling tools."""
 
 
-def _check_policy(tool: tools.Tool, args: dict) -> str | None:
-    """Validate a tool call before execution. Returns an error string if denied.
+_loaded_config: config_mod.Config | None = None
 
-    TODO(#A3): real policy engine (deny globs, workspace confinement,
-    require-approval). Stub for now — always allows.
-    """
-    return None
+
+def _get_config() -> config_mod.Config:
+    """Lazily load and cache the agent config."""
+    global _loaded_config
+    if _loaded_config is None:
+        _loaded_config = config_mod.load_config()
+    return _loaded_config
 
 
 def _drive(
@@ -49,6 +51,7 @@ def _drive(
     schemas: list[dict] | None,
     state: TaskState,
     max_iters: int,
+    approval_fn: Callable[[str], bool] | None = None,
 ) -> str:
     """Inner loop: run tools over ``messages`` until the LLM gives a final answer.
 
@@ -101,7 +104,7 @@ def _drive(
                 # falling through to the global registry.
                 result = f"[harness] unknown tool: {call.name}"
             else:
-                denied = _check_policy(tool, call.arguments)
+                denied = policy.check(tool, call.arguments, _get_config(), approval_fn)
                 if denied is not None:
                     result = f"[policy] denied: {denied}"
                 else:
@@ -126,6 +129,7 @@ def run_loop(
     state: TaskState,
     user_msg: str,
     max_iters: int = 25,
+    approval_fn: Callable[[str], bool] | None = None,
 ) -> str:
     """Run one agent turn until the LLM finishes or hits the cap.
 
@@ -139,6 +143,7 @@ def run_loop(
         state: Shared task state (read/written by tools and the loop).
         user_msg: The task/message that kicks off the turn.
         max_iters: Hard cap on tool-call iterations.
+        approval_fn: Optional callback for require_approval checks.
 
     Returns:
         The LLM's final text response (or a ``"[harness] stopped: ..."`` sentinel).
@@ -149,7 +154,7 @@ def run_loop(
     ]
     by_name = {t.name: t for t in tool_list}
     schemas = tools.schemas(tool_list) if tool_list else None
-    return _drive(messages, by_name, schemas, state, max_iters)
+    return _drive(messages, by_name, schemas, state, max_iters, approval_fn)
 
 
 def converse(
@@ -159,6 +164,7 @@ def converse(
     max_iters: int = 25,
     input_fn: Callable[[str], str] = input,
     output_fn: Callable[[str], None] = print,
+    approval_fn: Callable[[str], bool] | None = None,
 ) -> None:
     """Outer conversation loop — the interactive REPL core.
 
@@ -169,6 +175,15 @@ def converse(
     ``input_fn``/``output_fn`` are injected (default stdin/stdout) so the loop can
     be driven in tests without a real terminal.
     """
+    if approval_fn is None:
+        def approval_fn(description: str) -> bool:
+            output_fn(f"[approval required] {description}")
+            try:
+                answer = input_fn("Approve? [y/n]: ")
+                return answer.strip().lower() in ("y", "yes", "s", "si")
+            except (EOFError, KeyboardInterrupt):
+                return False
+
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     by_name = {t.name: t for t in tool_list}
     schemas = tools.schemas(tool_list) if tool_list else None
@@ -185,7 +200,7 @@ def converse(
             continue
 
         messages.append({"role": "user", "content": user})
-        reply = _drive(messages, by_name, schemas, state, max_iters)
+        reply = _drive(messages, by_name, schemas, state, max_iters, approval_fn)
         # Keep the assistant's final text in history so follow-ups have context.
         messages.append({"role": "assistant", "content": reply})
         output_fn(reply)

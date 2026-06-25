@@ -22,5 +22,8 @@ env/
 chroma_db/
 docs/fastapi/
 
+# Claude
+.claude/
+
 # OS
 .DS_Store
