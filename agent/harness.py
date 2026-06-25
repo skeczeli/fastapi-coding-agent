@@ -22,6 +22,7 @@ import json
 from typing import Callable
 
 from agent import config as config_mod, context, llm, policy, tools
+from agent.modes import HarnessMode, check_supervision
 from agent.state import TaskState
 
 # Default role prompt for the single-agent REPL (the ported in-class harness).
@@ -52,6 +53,8 @@ def _drive(
     state: TaskState,
     max_iters: int,
     approval_fn: Callable[[str], bool] | None = None,
+    mode: HarnessMode | None = None,
+    supervision_fn: Callable[[str], bool] | None = None,
 ) -> str:
     """Inner loop: run tools over ``messages`` until the LLM gives a final answer.
 
@@ -108,7 +111,16 @@ def _drive(
                 if denied is not None:
                     result = f"[policy] denied: {denied}"
                 else:
-                    result = tool.execute(call.arguments)
+                    if mode and supervision_fn:
+                        sup_denied = check_supervision(
+                            tool, call.arguments, mode, supervision_fn
+                        )
+                        if sup_denied is not None:
+                            result = f"[supervision] denied: {sup_denied}"
+                        else:
+                            result = tool.execute(call.arguments)
+                    else:
+                        result = tool.execute(call.arguments)
             messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
             observations.append(f"{call.name}: {result[:200]}")
 
@@ -130,6 +142,8 @@ def run_loop(
     user_msg: str,
     max_iters: int = 25,
     approval_fn: Callable[[str], bool] | None = None,
+    mode: HarnessMode | None = None,
+    supervision_fn: Callable[[str], bool] | None = None,
 ) -> str:
     """Run one agent turn until the LLM finishes or hits the cap.
 
@@ -144,6 +158,8 @@ def run_loop(
         user_msg: The task/message that kicks off the turn.
         max_iters: Hard cap on tool-call iterations.
         approval_fn: Optional callback for require_approval checks.
+        mode: Optional HarnessMode for plan/supervision modes.
+        supervision_fn: Optional callback for supervision checks.
 
     Returns:
         The LLM's final text response (or a ``"[harness] stopped: ..."`` sentinel).
@@ -154,7 +170,7 @@ def run_loop(
     ]
     by_name = {t.name: t for t in tool_list}
     schemas = tools.schemas(tool_list) if tool_list else None
-    return _drive(messages, by_name, schemas, state, max_iters, approval_fn)
+    return _drive(messages, by_name, schemas, state, max_iters, approval_fn, mode, supervision_fn)
 
 
 def converse(
@@ -165,6 +181,8 @@ def converse(
     input_fn: Callable[[str], str] = input,
     output_fn: Callable[[str], None] = print,
     approval_fn: Callable[[str], bool] | None = None,
+    mode: HarnessMode | None = None,
+    supervision_fn: Callable[[str], bool] | None = None,
 ) -> None:
     """Outer conversation loop — the interactive REPL core.
 
@@ -180,6 +198,19 @@ def converse(
             output_fn(f"[approval required] {description}")
             try:
                 answer = input_fn("Approve? [y/n]: ")
+                return answer.strip().lower() in ("y", "yes", "s", "si")
+            except (EOFError, KeyboardInterrupt):
+                return False
+
+    if mode is None:
+        mode = HarnessMode()
+
+    # Default supervision_fn when mode has supervision on
+    if supervision_fn is None and mode and mode.supervision_enabled:
+        def supervision_fn(description: str) -> bool:
+            output_fn(f"[supervision] {description}")
+            try:
+                answer = input_fn("Allow? [y/n]: ")
                 return answer.strip().lower() in ("y", "yes", "s", "si")
             except (EOFError, KeyboardInterrupt):
                 return False
@@ -200,7 +231,7 @@ def converse(
             continue
 
         messages.append({"role": "user", "content": user})
-        reply = _drive(messages, by_name, schemas, state, max_iters, approval_fn)
+        reply = _drive(messages, by_name, schemas, state, max_iters, approval_fn, mode, supervision_fn)
         # Keep the assistant's final text in history so follow-ups have context.
         messages.append({"role": "assistant", "content": reply})
         output_fn(reply)

@@ -81,3 +81,56 @@ def test_run_loop_still_returns_final_text():
     out = harness.run_loop("you are a test agent", [], state, "do nothing")
     assert isinstance(out, str)
     assert "do nothing" in out
+
+
+# Supervision mode tests
+
+from agent.modes import HarnessMode
+from agent import llm
+
+
+def test_drive_supervision_blocks_write_tool():
+    state = TaskState(request="x")
+    spy = _SpyTool(name="writer", permission="write")
+    mode = HarnessMode(supervision_enabled=True)
+
+    llm.set_mock_script(
+        [
+            LLMResponse(tool_calls=[ToolCall(id="1", name="writer", arguments={})]),
+            LLMResponse(content="ok"),
+        ]
+    )
+    outputs: list[str] = []
+    harness.converse(
+        [spy],
+        state,
+        mode=mode,
+        input_fn=_feed("do it"),
+        output_fn=outputs.append,
+        approval_fn=lambda _: True,  # policy approval
+        supervision_fn=lambda _: False,  # supervision rejects
+    )
+    assert spy.calls == []  # tool never executed
+
+
+def test_drive_supervision_allows_read_tool():
+    state = TaskState(request="x")
+    spy = _SpyTool(name="reader", permission="read")
+    mode = HarnessMode(supervision_enabled=True)
+
+    llm.set_mock_script(
+        [
+            LLMResponse(tool_calls=[ToolCall(id="1", name="reader", arguments={})]),
+            LLMResponse(content="done"),
+        ]
+    )
+    outputs: list[str] = []
+    harness.converse(
+        [spy],
+        state,
+        mode=mode,
+        input_fn=_feed("read it"),
+        output_fn=outputs.append,
+        supervision_fn=lambda _: False,  # would reject, but reads bypass
+    )
+    assert spy.calls == [{}]  # tool executed despite supervision_fn returning False
