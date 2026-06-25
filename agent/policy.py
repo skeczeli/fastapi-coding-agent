@@ -140,9 +140,21 @@ def check(
 
     elif tool.permission == "command":
         command = args.get("command", "")
-        if command and config.commands.deny:
-            matched = _command_matches_any(command, config.commands.deny)
-            if matched:
-                return f"command matches commands.deny pattern: {matched}"
+        if command:
+            if config.commands.deny:
+                matched = _command_matches_any(command, config.commands.deny)
+                if matched:
+                    return f"command matches commands.deny pattern: {matched}"
+            if config.commands.require_approval:
+                matched = _command_matches_any(
+                    command, config.commands.require_approval
+                )
+                if matched:
+                    if approval_fn is None:
+                        return (
+                            f"command requires approval (no approval handler): {matched}"
+                        )
+                    if not approval_fn(f"run command: {command}"):
+                        return f"command rejected by user: {matched}"
 
     return None

@@ -241,3 +241,68 @@ class TestCommandDeny:
         tool = _StubTool(permission="command")
         result = check(tool, {"command": ":(){ :|:& };:"}, cfg)
         assert result is not None
+
+
+class TestRequireApproval:
+    def test_calls_approval_fn_and_allows_on_true(self):
+        from agent.policy import check
+
+        cfg = _config(commands=PolicyConfig(require_approval=["git push*"]))
+        tool = _StubTool(permission="command")
+        called_with = []
+
+        def approve(desc: str) -> bool:
+            called_with.append(desc)
+            return True
+
+        result = check(tool, {"command": "git push origin main"}, cfg, approval_fn=approve)
+        assert result is None
+        assert len(called_with) == 1
+        assert "git push origin main" in called_with[0]
+
+    def test_denies_on_approval_fn_false(self):
+        from agent.policy import check
+
+        cfg = _config(commands=PolicyConfig(require_approval=["pip install*"]))
+        tool = _StubTool(permission="command")
+        result = check(
+            tool, {"command": "pip install requests"}, cfg, approval_fn=lambda _: False
+        )
+        assert result is not None
+        assert "rejected" in result
+
+    def test_denies_when_no_approval_fn(self):
+        from agent.policy import check
+
+        cfg = _config(commands=PolicyConfig(require_approval=["git push*"]))
+        tool = _StubTool(permission="command")
+        result = check(tool, {"command": "git push origin main"}, cfg, approval_fn=None)
+        assert result is not None
+        assert "no approval handler" in result
+
+    def test_deny_checked_before_approval(self):
+        from agent.policy import check
+
+        cfg = _config(
+            commands=PolicyConfig(deny=["rm -rf*"], require_approval=["rm *"])
+        )
+        tool = _StubTool(permission="command")
+        result = check(tool, {"command": "rm -rf /"}, cfg, approval_fn=lambda _: True)
+        assert result is not None
+        assert "deny" in result
+
+    def test_approval_not_triggered_for_non_matching(self):
+        from agent.policy import check
+
+        cfg = _config(commands=PolicyConfig(require_approval=["git push*"]))
+        tool = _StubTool(permission="command")
+        called = []
+
+        result = check(
+            tool,
+            {"command": "echo hello"},
+            cfg,
+            approval_fn=lambda d: called.append(d) or True,
+        )
+        assert result is None
+        assert called == []
