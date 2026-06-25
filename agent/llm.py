@@ -114,6 +114,11 @@ def complete(
     if os.getenv("AGENT_LLM_MOCK"):
         return _mock_response(messages, tools)
 
+    import time
+
+    from agent import observability
+
+    tracer = observability.get_tracer()
     client = _get_client()
     kwargs: dict[str, Any] = {
         "model": model,
@@ -123,14 +128,39 @@ def complete(
     if tools:
         kwargs["tools"] = tools
 
-    resp = client.chat.completions.create(**kwargs)
-    choice = resp.choices[0].message
-    calls: list[ToolCall] = []
-    for tc in choice.tool_calls or []:
-        try:
-            args = json.loads(tc.function.arguments or "{}")
-        except json.JSONDecodeError:
-            args = {}
-        calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
+    # One generation span per LLM call: model + prompt in, response + token usage
+    # + latency out. Nests under whatever span the harness opened (the agent turn).
+    start = time.perf_counter()
+    with tracer.span("llm.complete", as_type="generation", model=model, input=messages):
+        resp = client.chat.completions.create(**kwargs)
+        choice = resp.choices[0].message
+        calls: list[ToolCall] = []
+        for tc in choice.tool_calls or []:
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
+
+        usage = getattr(resp, "usage", None)
+        usage_details = None
+        if usage is not None:
+            usage_details = {
+                k: v
+                for k, v in {
+                    "input": getattr(usage, "prompt_tokens", None),
+                    "output": getattr(usage, "completion_tokens", None),
+                    "total": getattr(usage, "total_tokens", None),
+                }.items()
+                if v is not None
+            }
+        tracer.log(
+            output=choice.content or "",
+            usage_details=usage_details,
+            metadata={
+                "latency_ms": round((time.perf_counter() - start) * 1000),
+                "tool_calls": len(calls),
+            },
+        )
 
     return LLMResponse(content=choice.content or "", tool_calls=calls, raw=resp)

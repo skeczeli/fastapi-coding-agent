@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 from typing import Callable
 
-from agent import config as config_mod, context, llm, policy, tools
+from agent import config as config_mod, context, llm, observability, policy, tools
 from agent.modes import HarnessMode, check_supervision, run_plan_approval
 from agent.state import TaskState
 
@@ -72,67 +72,80 @@ def _drive(
     # is shared across every subagent, so feeding it whole to detect_loop would
     # mix runs and invite cross-agent false positives.
     observations: list[str] = []
+    tracer = observability.get_tracer()
 
-    for _ in range(max_iters):
-        # Keep the working context small (no-op until #C7). Assign back in place
-        # so a summarized history propagates to the caller's persistent list.
-        messages[:] = context.summarize_history(messages)
-        resp = llm.complete(messages, tools=schemas)
+    # One root span per agent turn; LLM generations and tool spans nest under it.
+    with tracer.span("agent.turn", as_type="agent"):
+        for iteration in range(max_iters):
+            # Keep the working context small (no-op until #C7). Assign back in place
+            # so a summarized history propagates to the caller's persistent list.
+            messages[:] = context.summarize_history(messages)
+            resp = llm.complete(messages, tools=schemas)
 
-        if not resp.tool_calls:
-            return resp.content
+            if not resp.tool_calls:
+                tracer.log(output=resp.content, metadata={"iterations": iteration + 1})
+                return resp.content
 
-        # Record the assistant turn that requested the tools.
-        messages.append(
-            {
-                "role": "assistant",
-                "content": resp.content or None,
-                "tool_calls": [
-                    {
-                        "id": c.id,
-                        "type": "function",
-                        "function": {"name": c.name, "arguments": json.dumps(c.arguments)},
-                    }
-                    for c in resp.tool_calls
-                ],
-            }
-        )
+            # Record the assistant turn that requested the tools.
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": resp.content or None,
+                    "tool_calls": [
+                        {
+                            "id": c.id,
+                            "type": "function",
+                            "function": {"name": c.name, "arguments": json.dumps(c.arguments)},
+                        }
+                        for c in resp.tool_calls
+                    ],
+                }
+            )
 
-        for call in resp.tool_calls:
-            # SEAM(#A4): plan/supervision modes hook in here — confirm a write/
-            # command (or show a plan) before the call runs. Read-only tools pass.
-            tool = by_name.get(call.name)
-            if tool is None:
-                # Outside this loop's allowed toolset — refuse instead of
-                # falling through to the global registry.
-                result = f"[harness] unknown tool: {call.name}"
-            else:
-                denied = policy.check(tool, call.arguments, _get_config(), approval_fn)
-                if denied is not None:
-                    result = f"[policy] denied: {denied}"
-                else:
-                    if mode and supervision_fn:
-                        sup_denied = check_supervision(
-                            tool, call.arguments, mode, supervision_fn
-                        )
-                        if sup_denied is not None:
-                            result = f"[supervision] denied: {sup_denied}"
-                        else:
-                            result = tool.execute(call.arguments)
+            for call in resp.tool_calls:
+                # SEAM(#A4): plan/supervision modes hook in here — confirm a write/
+                # command (or show a plan) before the call runs. Read-only tools pass.
+                with tracer.span(f"tool:{call.name}", as_type="tool", input=call.arguments):
+                    tool = by_name.get(call.name)
+                    if tool is None:
+                        # Outside this loop's allowed toolset — refuse instead of
+                        # falling through to the global registry.
+                        result = f"[harness] unknown tool: {call.name}"
                     else:
-                        result = tool.execute(call.arguments)
-            messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
-            observations.append(f"{call.name}: {result[:200]}")
+                        denied = policy.check(tool, call.arguments, _get_config(), approval_fn)
+                        if denied is not None:
+                            result = f"[policy] denied: {denied}"
+                        else:
+                            if mode and supervision_fn:
+                                sup_denied = check_supervision(
+                                    tool, call.arguments, mode, supervision_fn
+                                )
+                                if sup_denied is not None:
+                                    result = f"[supervision] denied: {sup_denied}"
+                                else:
+                                    result = tool.execute(call.arguments)
+                            else:
+                                result = tool.execute(call.arguments)
+                    blocked = result.startswith(
+                        ("[harness] unknown", "[policy] denied", "[supervision] denied")
+                    )
+                    tracer.log(output=result, level="WARNING" if blocked else None)
+                messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
+                observations.append(f"{call.name}: {result[:200]}")
 
-        # Bail out of a no-progress loop instead of burning iterations (no-op
-        # until #C7). This and the summarize call above are the context-management
-        # hook points #C7 fills in once it lands.
-        if context.detect_loop(observations):
-            state.note("run_loop stopped: no-progress loop detected")
-            return "[harness] stopped: no progress (loop detected)"
+            # Bail out of a no-progress loop instead of burning iterations (no-op
+            # until #C7). This and the summarize call above are the context-management
+            # hook points #C7 fills in once it lands.
+            if context.detect_loop(observations):
+                state.note("run_loop stopped: no-progress loop detected")
+                tracer.log(output="[loop detected]", level="WARNING")
+                return "[harness] stopped: no progress (loop detected)"
 
-    state.note(f"run_loop hit max_iters={max_iters}")
-    return "[harness] stopped: reached max iterations"
+        state.note(f"run_loop hit max_iters={max_iters}")
+        tracer.log(
+            output="[max iters]", level="WARNING", metadata={"iterations": max_iters}
+        )
+        return "[harness] stopped: reached max iterations"
 
 
 def run_loop(
