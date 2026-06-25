@@ -306,3 +306,34 @@ class TestRequireApproval:
         )
         assert result is None
         assert called == []
+
+
+class TestHarnessIntegration:
+    def test_harness_blocks_denied_tool_call(self, monkeypatch):
+        from agent import harness, llm
+        from agent.config import Config, PolicyConfig
+        from agent.llm import LLMResponse, ToolCall
+        from agent.state import TaskState
+
+        cfg = Config(
+            workspace=".",
+            read=PolicyConfig(deny=[".env"]),
+        )
+        monkeypatch.setattr(harness, "_loaded_config", cfg)
+
+        spy = _StubTool(name="read_file", permission="read")
+
+        llm.set_mock_script(
+            [
+                LLMResponse(
+                    tool_calls=[
+                        ToolCall(id="1", name="read_file", arguments={"path": ".env"})
+                    ]
+                ),
+                LLMResponse(content="I see it was denied"),
+            ]
+        )
+
+        state = TaskState(request="read .env")
+        harness.run_loop("test", [spy], state, "read .env")
+        assert spy.calls == []  # tool was NOT executed
