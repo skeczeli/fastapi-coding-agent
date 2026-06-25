@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from agent import llm as llm_mod
 from agent.tools import Tool
 
 
@@ -40,3 +41,45 @@ def check_supervision(
     if confirm_fn(desc):
         return None
     return f"tool call rejected by user (supervision): {tool.name}"
+
+
+_PLAN_PROMPT = (
+    "Before executing, generate a step-by-step plan for the following task. "
+    "List numbered steps. Do NOT execute anything yet — only output the plan."
+)
+
+
+def run_plan_approval(
+    user_msg: str,
+    messages: list[dict],
+    mode: HarnessMode,
+    output_fn: Callable[[str], None],
+    input_fn: Callable[[str], str],
+) -> str | None:
+    """Plan mode hook: ask the LLM for a plan, let the user approve/modify/reject.
+
+    Returns:
+        None  — plan approved, proceed with execution.
+        "rejected" — user rejected, abort this turn.
+        str — modified instructions from the user (re-plan with these).
+    """
+    if not mode.plan_enabled:
+        return None
+
+    plan_messages = [m for m in messages if m.get("role") == "system"]
+    plan_messages.append({"role": "user", "content": f"{_PLAN_PROMPT}\n\nTask: {user_msg}"})
+
+    resp = llm_mod.complete(plan_messages)
+    plan_text = resp.content
+
+    output_fn(f"\n--- Proposed Plan ---\n{plan_text}\n---------------------")
+    output_fn("[a]pprove / [m]odify / [r]eject")
+
+    choice = input_fn("plan> ").strip().lower()
+    if choice.startswith("a"):
+        return None
+    if choice.startswith("r"):
+        return "rejected"
+    # modify: ask for new instructions
+    new_instructions = input_fn("new instructions> ").strip()
+    return new_instructions

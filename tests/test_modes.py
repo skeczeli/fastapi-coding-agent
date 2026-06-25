@@ -50,3 +50,75 @@ def test_supervision_noop_when_disabled():
     tool = _FakeTool(name="write_file", permission="write")
     result = check_supervision(tool, {}, mode, confirm_fn=lambda _: False)
     assert result is None
+
+
+# Plan mode tests
+
+from agent.modes import run_plan_approval
+
+
+def test_plan_approval_noop_when_disabled():
+    mode = HarnessMode(plan_enabled=False)
+    result = run_plan_approval(
+        user_msg="add endpoint",
+        messages=[],
+        mode=mode,
+        output_fn=lambda _: None,
+        input_fn=lambda _: "",
+    )
+    assert result is None
+
+
+def test_plan_approval_shows_plan_and_accepts():
+    mode = HarnessMode(plan_enabled=True)
+    outputs: list[str] = []
+    # Simulate: LLM returns a plan text, user approves
+    import agent.llm as llm_mod
+    from agent.llm import LLMResponse
+
+    llm_mod.set_mock_script([LLMResponse(content="1. Read main.py\n2. Add function")])
+
+    result = run_plan_approval(
+        user_msg="add endpoint",
+        messages=[{"role": "system", "content": "you are an agent"}],
+        mode=mode,
+        output_fn=outputs.append,
+        input_fn=lambda _: "a",
+    )
+    assert result is None  # None means "proceed with execution"
+    assert any("1. Read main.py" in o for o in outputs)
+
+
+def test_plan_approval_rejects():
+    mode = HarnessMode(plan_enabled=True)
+    import agent.llm as llm_mod
+    from agent.llm import LLMResponse
+
+    llm_mod.set_mock_script([LLMResponse(content="1. Do something")])
+
+    result = run_plan_approval(
+        user_msg="add endpoint",
+        messages=[{"role": "system", "content": "you are an agent"}],
+        mode=mode,
+        output_fn=lambda _: None,
+        input_fn=lambda _: "r",
+    )
+    assert result == "rejected"
+
+
+def test_plan_approval_modify_returns_new_message():
+    mode = HarnessMode(plan_enabled=True)
+    import agent.llm as llm_mod
+    from agent.llm import LLMResponse
+
+    llm_mod.set_mock_script([LLMResponse(content="1. Do X")])
+
+    inputs = iter(["m", "do X but skip step 2"])
+    result = run_plan_approval(
+        user_msg="add endpoint",
+        messages=[{"role": "system", "content": "you are an agent"}],
+        mode=mode,
+        output_fn=lambda _: None,
+        input_fn=lambda _: next(inputs),
+    )
+    assert result == "do X but skip step 2"
