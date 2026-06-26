@@ -17,9 +17,43 @@ def summarize_history(messages: list[dict], keep_last: int = 6) -> list[dict]:
     return messages
 
 
-def detect_loop(observations: list[str], window: int = 3) -> bool:
-    """Return True if the recent observations look like a no-progress loop.
+def detect_loop(observations: list[str], window: int = 4) -> str | None:
+    """Detect no-progress loops in recent observations.
 
-    Stub for #0 — always False. Implemented in #C7.
+    Checks the last *window* observations for two patterns:
+    1. Same observation repeated ≥3 times (single-step loop).
+    2. A repeating cycle of 2 observations (two-step loop: A,B,A,B).
+
+    Returns a suggestion string when a loop is found, None otherwise.
     """
-    return False
+    if len(observations) < 3:
+        return None
+
+    recent = observations[-window:]
+
+    # Pattern 1: single observation repeated ≥3 times in the window
+    from collections import Counter
+    counts = Counter(recent)
+    for obs, count in counts.most_common(1):
+        if count >= 3:
+            tool_name = obs.split(":")[0] if ":" in obs else "unknown"
+            return (
+                f"No progress: {tool_name} returned the same result {count} times. "
+                f"Try a different approach — change the arguments, use a different tool, "
+                f"or ask the user for help."
+            )
+
+    # Pattern 2: two-step cycle (A, B, A, B) — need ≥4 observations
+    if len(recent) >= 4:
+        pairs = [(recent[i], recent[i + 1]) for i in range(len(recent) - 1)]
+        if len(pairs) >= 3:
+            for i in range(len(pairs) - 2):
+                if pairs[i] == pairs[i + 2]:
+                    tool_a = pairs[i][0].split(":")[0] if ":" in pairs[i][0] else "unknown"
+                    tool_b = pairs[i][1].split(":")[0] if ":" in pairs[i][1] else "unknown"
+                    return (
+                        f"No progress: repeating cycle of {tool_a} → {tool_b} "
+                        f"with the same results. Try a different strategy or ask for help."
+                    )
+
+    return None
