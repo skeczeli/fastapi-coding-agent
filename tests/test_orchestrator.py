@@ -121,3 +121,49 @@ def test_orchestrator_no_script_returns_state():
     assert isinstance(state, TaskState)
     assert state.request == "trivial task"
     assert "orchestrator" in state.subagent_results
+
+
+from agent.agents.orchestrator import RememberProjectTool
+from agent.memory import ProjectMemory
+
+
+def test_remember_project_tool_satisfies_protocol():
+    from agent.tools import Tool
+
+    mem = ProjectMemory(path="/tmp/unused")
+    tool = RememberProjectTool(memory=mem)
+    assert isinstance(tool, Tool)
+    assert tool.name == "remember_project"
+    assert tool.permission == "write"
+
+
+def test_remember_project_tool_writes_to_memory(tmp_path):
+    mem_dir = str(tmp_path / ".agent_memory")
+    mem = ProjectMemory(path=mem_dir)
+    tool = RememberProjectTool(memory=mem)
+
+    result = tool.execute({"category": "dependencies", "content": "SQLAlchemy for ORM"})
+    assert "remembered" in result.lower() or "saved" in result.lower()
+    assert mem.get_category("dependencies") == ["SQLAlchemy for ORM"]
+
+
+def test_remember_project_tool_handles_architecture(tmp_path):
+    mem_dir = str(tmp_path / ".agent_memory")
+    mem = ProjectMemory(path=mem_dir)
+    tool = RememberProjectTool(memory=mem)
+
+    tool.execute({"category": "architecture", "content": "FastAPI monolith"})
+    assert mem.data["architecture"] == "FastAPI monolith"
+
+
+def test_orchestrator_includes_remember_project_tool():
+    llm.set_mock_script(
+        [
+            _call("remember_project", "remember deps", "c1"),
+            _text("Done."),
+        ]
+    )
+
+    roster = [_StubSubagent(n) for n in ("explorer", "researcher", "implementer", "tester", "reviewer")]
+    state = orchestrator.run("task", subagents=roster)
+    assert "unknown tool" not in state.subagent_results.get("orchestrator", "")

@@ -127,6 +127,62 @@ class SubagentTool:
         return self.subagent.run(self.state, task)
 
 
+@dataclass
+class RememberProjectTool:
+    """Tool that lets the orchestrator persist findings to project memory.
+
+    Built per-run with the current ``ProjectMemory`` instance — same pattern
+    as ``SubagentTool``. Not globally registered.
+    """
+
+    memory: ProjectMemory
+    name: str = "remember_project"
+    description: str = (
+        "Persist a finding to project memory so it's available in future runs. "
+        "Use this whenever you learn something durable about the project: "
+        "architecture, key files, dependencies, useful commands, conventions, "
+        "decisions, or bugs investigated."
+    )
+    permission: Permission = "write"
+
+    @property
+    def parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "enum": [
+                        "architecture",
+                        "important_files",
+                        "dependencies",
+                        "commands",
+                        "conventions",
+                        "decisions",
+                        "bugs",
+                    ],
+                    "description": "The memory category to store the finding under.",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The finding to persist.",
+                },
+            },
+            "required": ["category", "content"],
+        }
+
+    def execute(self, args: dict) -> str:
+        category = args.get("category", "")
+        content = args.get("content", "")
+        if not category or not content:
+            return "[error] both 'category' and 'content' are required"
+        if category == "architecture":
+            self.memory.set_architecture(content)
+        else:
+            self.memory.remember(category, content)
+        return f"Remembered in '{category}': {content}"
+
+
 def default_subagents() -> list[Subagent]:
     """The standard roster, in the intended explore→…→review order.
 
@@ -147,7 +203,7 @@ def run(
     request: str,
     subagents: list[Subagent] | None = None,
     max_iters: int = 25,
-    memory_path: str = ".agent_memory.json",
+    memory_path: str = ".agent_memory",
 ) -> TaskState:
     """Run a full coding task end-to-end and return the final shared state.
 
@@ -161,7 +217,7 @@ def run(
         request: The user's coding task, verbatim.
         subagents: Roster to coordinate. Defaults to the standard five.
         max_iters: Hard cap on orchestration steps (passed to ``run_loop``).
-        memory_path: Where per-project memory is persisted (no-op until #C6).
+        memory_path: Directory where per-project memory is persisted (default: .agent_memory/).
 
     Returns:
         The final ``TaskState`` after the run completes or hits the cap.
@@ -170,7 +226,8 @@ def run(
     mem = ProjectMemory.load(memory_path)
 
     roster = subagents if subagents is not None else default_subagents()
-    tool_list = [SubagentTool(subagent=sa, state=state) for sa in roster]
+    tool_list: list = [SubagentTool(subagent=sa, state=state) for sa in roster]
+    tool_list.append(RememberProjectTool(memory=mem))
 
     summary = harness.run_loop(
         system_prompt=ORCHESTRATOR_PROMPT,
