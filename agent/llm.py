@@ -15,9 +15,10 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
-# Default model. gpt-5-nano needs a high max_completion_tokens because it spends
-# internal reasoning tokens — too low and it returns empty content (TP1 lesson).
-DEFAULT_MODEL = "gpt-5-nano"
+# Output-token cap. gpt-5-nano needs a high cap because it spends internal
+# reasoning tokens — too low and it returns empty content (TP1 lesson). The model
+# id and the cap's *parameter name* now come from ``providers.chat_config()`` so
+# the backend (OpenAI / Gemini / any OpenAI-compatible endpoint) is env-selectable.
 DEFAULT_MAX_COMPLETION_TOKENS = 4000
 
 
@@ -67,18 +68,25 @@ def set_mock_script(responses: list["LLMResponse"] | None) -> None:
 
 
 def _get_client():
-    """Lazily build the OpenAI client so importing this module needs no API key."""
+    """Lazily build the (OpenAI-compatible) client for the configured chat provider.
+
+    Importing this module needs no API key. The client is pointed at whatever
+    ``providers.chat_config()`` resolves (OpenAI by default; Gemini or any
+    compatible endpoint when the ``AGENT_LLM_*`` env vars are set).
+    """
     global _client
     if _client is None:
         from dotenv import load_dotenv  # load .env here, not at import time
 
-        # Pull OPENAI_API_KEY from .env so every entrypoint (orchestrator, CLI,
-        # #I1) works without the caller remembering to load it. No-op if the key
-        # is already in the environment; never reached in mock mode.
+        # Pull keys/URLs from .env so every entrypoint (orchestrator, CLI, #I1)
+        # works without the caller remembering to load it. No-op if already in the
+        # environment; never reached in mock mode.
         load_dotenv()
         from openai import OpenAI  # imported lazily; core import stays light
 
-        _client = OpenAI()
+        from agent.providers import chat_config
+
+        _client = OpenAI(**chat_config().client_kwargs())
     return _client
 
 
@@ -97,7 +105,7 @@ def _mock_response(messages: list[dict], tools: list[dict] | None) -> LLMRespons
 def complete(
     messages: list[dict],
     tools: list[dict] | None = None,
-    model: str = DEFAULT_MODEL,
+    model: str | None = None,
     max_completion_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
 ) -> LLMResponse:
     """Call the LLM once and return a normalized ``LLMResponse``.
@@ -105,8 +113,11 @@ def complete(
     Args:
         messages: OpenAI-style chat messages.
         tools: Tool schemas in OpenAI tool-calling format (see ``tools.schemas``).
-        model: Model id (defaults to gpt-5-nano).
-        max_completion_tokens: Output cap; kept high for reasoning models.
+        model: Model id. ``None`` → the configured provider's default
+            (``providers.chat_config().model``).
+        max_completion_tokens: Output cap; kept high for reasoning models. Sent
+            under the provider's expected param name (``max_completion_tokens`` for
+            OpenAI, ``max_tokens`` for most compatible endpoints).
 
     Returns:
         An ``LLMResponse`` with text and/or tool calls.
@@ -117,13 +128,17 @@ def complete(
     import time
 
     from agent import observability
+    from agent.providers import chat_config
+
+    cfg = chat_config()
+    model = model or cfg.model
 
     tracer = observability.get_tracer()
     client = _get_client()
     kwargs: dict[str, Any] = {
         "model": model,
         "messages": messages,
-        "max_completion_tokens": max_completion_tokens,
+        cfg.max_tokens_param: max_completion_tokens,
     }
     if tools:
         kwargs["tools"] = tools

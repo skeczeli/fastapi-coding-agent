@@ -24,7 +24,9 @@ import os
 CHROMA_DIR = os.getenv("AGENT_CHROMA_DIR", "chroma_db")
 COLLECTION_NAME = "fastapi_docs"
 
-EMBED_MODEL = "text-embedding-3-small"
+# The embedding model now comes from ``providers.embed_config()`` so the backend
+# is env-selectable (OpenAI ``text-embedding-3-small`` by default; Gemini, etc.
+# via AGENT_EMBED_*). Switching it changes the vector space — re-ingest after.
 # OpenAI's embeddings endpoint accepts many inputs per call; batch to cut
 # round-trips and stay well under request limits.
 EMBED_BATCH = 100
@@ -32,25 +34,38 @@ EMBED_BATCH = 100
 _client = None
 
 
-def _openai():
-    """Lazily build the OpenAI client (RAG-local; chat goes through ``llm.py``)."""
+def _embed_client():
+    """Lazily build the (OpenAI-compatible) embedding client for the configured provider.
+
+    RAG-local on purpose — chat goes through ``llm.py``; embeddings can run on a
+    different backend, so each owns its own client.
+    """
     global _client
     if _client is None:
+        from dotenv import load_dotenv  # ensure AGENT_EMBED_* / keys are loaded
+
+        load_dotenv()
         from openai import OpenAI
 
-        _client = OpenAI()
+        from agent.providers import embed_config
+
+        _client = OpenAI(**embed_config().client_kwargs())
     return _client
 
 
-def embed_texts(texts: list[str], model: str = EMBED_MODEL) -> list[list[float]]:
-    """Embed a list of texts with OpenAI, batching under ``EMBED_BATCH``.
+def embed_texts(texts: list[str], model: str | None = None) -> list[list[float]]:
+    """Embed a list of texts with the configured provider, batching under ``EMBED_BATCH``.
 
     Used for both documents (ingest) and queries (retrieve) so the vectors are
-    comparable. Returns one vector per input, in the same order.
+    comparable. ``model`` defaults to the configured embedding model. Returns one
+    vector per input, in the same order.
     """
     if not texts:
         return []
-    client = _openai()
+    from agent.providers import embed_config
+
+    model = model or embed_config().model
+    client = _embed_client()
     out: list[list[float]] = []
     for i in range(0, len(texts), EMBED_BATCH):
         batch = texts[i : i + EMBED_BATCH]
