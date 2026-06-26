@@ -27,3 +27,6 @@ docs/fastapi/
 
 # OS
 .DS_Store
+
+# Per-project agent memory (persisted by #C6)
+.agent_memory/
