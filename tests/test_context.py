@@ -1,6 +1,11 @@
 """Context management tests (#C7)."""
 
+from dataclasses import dataclass, field
+
+from agent import harness, llm
 from agent.context import detect_loop, summarize_history, _estimate_tokens
+from agent.llm import LLMResponse, ToolCall
+from agent.state import TaskState
 
 
 class TestDetectLoop:
@@ -140,3 +145,50 @@ class TestSummarizeHistory:
         ]
         result = summarize_history(msgs, keep_last=4)
         assert result == msgs
+
+
+# Acceptance test
+
+
+@dataclass
+class _EchoTool:
+    """A tool that always returns the same result — simulates a stuck agent."""
+    name: str = "read_file"
+    description: str = "reads a file"
+    parameters: dict = field(default_factory=lambda: {
+        "type": "object",
+        "properties": {"path": {"type": "string"}},
+    })
+    permission: str = "read"
+
+    def execute(self, args: dict) -> str:
+        return "contents of main.py: from fastapi import FastAPI"
+
+
+def test_acceptance_looping_task_is_caught():
+    """Acceptance: a deliberately looping task is caught and the agent
+    changes strategy or asks for help."""
+    state = TaskState(request="fix the bug")
+    tool = _EchoTool()
+
+    # Script: the LLM calls read_file with the same args 5 times in a row.
+    # detect_loop should fire and stop the harness before all 5 run.
+    script = [
+        LLMResponse(
+            tool_calls=[ToolCall(id=f"c{i}", name="read_file", arguments={"path": "main.py"})]
+        )
+        for i in range(5)
+    ]
+    # Add a final response that should never be reached.
+    script.append(LLMResponse(content="I fixed it!"))
+    llm.set_mock_script(script)
+
+    result = harness.run_loop("agent", [tool], state, "fix the bug", max_iters=10)
+
+    # The harness must have stopped due to loop detection, not max_iters.
+    assert "stopped" in result
+    assert "read_file" in result
+    # The suggestion must mention trying something different.
+    assert "different" in result.lower() or "strategy" in result.lower() or "help" in result.lower()
+    # The state must record the loop.
+    assert any("stopped" in o for o in state.observations)
