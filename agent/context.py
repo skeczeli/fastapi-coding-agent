@@ -8,13 +8,91 @@ Real implementation is #C7 (Dev 3); #0 only fixes the interface.
 
 from __future__ import annotations
 
+import logging
 
-def summarize_history(messages: list[dict], keep_last: int = 6) -> list[dict]:
-    """Compress old turns into a summary, keeping the last few verbatim.
+log = logging.getLogger(__name__)
 
-    Stub for #0 — returns ``messages`` unchanged. Implemented in #C7.
+TOKEN_BUDGET = 12_000
+WORD_TOKEN_FACTOR = 1.3
+
+
+def _estimate_tokens(messages: list[dict]) -> int:
+    """Cheap token estimate: count words × 1.3."""
+    total = 0
+    for m in messages:
+        content = m.get("content") or ""
+        total += len(content.split())
+    return int(total * WORD_TOKEN_FACTOR)
+
+
+def _build_mechanical_summary(messages: list[dict]) -> str:
+    """Extract key decisions and tool results from discarded messages."""
+    parts: list[str] = []
+    for m in messages:
+        role = m.get("role", "")
+        content = m.get("content") or ""
+        if role == "assistant" and content:
+            parts.append(f"- Assistant: {content[:200]}")
+        elif role == "tool":
+            parts.append(f"- Tool result: {content[:150]}")
+    if not parts:
+        return "Prior conversation context (details truncated)."
+    return "Summary of earlier conversation:\n" + "\n".join(parts[:15])
+
+
+def _llm_summary(messages: list[dict]) -> str:
+    """Ask the LLM to summarize discarded messages."""
+    from agent import llm as llm_mod
+
+    text_parts = []
+    for m in messages:
+        role = m.get("role", "")
+        content = m.get("content") or ""
+        if content:
+            text_parts.append(f"{role}: {content[:300]}")
+    combined = "\n".join(text_parts[:20])
+    summary_messages = [
+        {"role": "system", "content": "Summarize this conversation fragment in 2-3 sentences. Keep key decisions, findings, and tool results. Be concise."},
+        {"role": "user", "content": combined},
+    ]
+    try:
+        resp = llm_mod.complete(summary_messages, tools=None)
+        return resp.content or _build_mechanical_summary(messages)
+    except Exception:
+        log.warning("LLM summary failed, falling back to mechanical summary")
+        return _build_mechanical_summary(messages)
+
+
+def summarize_history(
+    messages: list[dict], keep_last: int = 6, token_budget: int = TOKEN_BUDGET
+) -> list[dict]:
+    """Compress old turns when approaching the token budget.
+
+    Below budget: returns messages unchanged.
+    Over budget: keeps the system message + a summary of old turns + the last
+    *keep_last* messages. Uses mechanical truncation for moderate overages;
+    calls the LLM for a real summary when the overflow is large (>2× budget).
     """
-    return messages
+    if _estimate_tokens(messages) <= token_budget:
+        return messages
+
+    system = [m for m in messages if m.get("role") == "system"]
+    non_system = [m for m in messages if m.get("role") != "system"]
+
+    if len(non_system) <= keep_last:
+        return messages
+
+    to_discard = non_system[:-keep_last]
+    to_keep = non_system[-keep_last:]
+
+    overflow = _estimate_tokens(messages) - token_budget
+    if overflow > token_budget:
+        summary_text = _llm_summary(to_discard)
+    else:
+        summary_text = _build_mechanical_summary(to_discard)
+
+    summary_msg = {"role": "user", "content": f"[context summary]\n{summary_text}"}
+    return system + [summary_msg] + to_keep
 
 
 def detect_loop(observations: list[str], window: int = 4) -> str | None:
