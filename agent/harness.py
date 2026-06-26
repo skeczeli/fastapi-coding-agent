@@ -136,10 +136,11 @@ def _drive(
             # Bail out of a no-progress loop instead of burning iterations (no-op
             # until #C7). This and the summarize call above are the context-management
             # hook points #C7 fills in once it lands.
-            if context.detect_loop(observations):
-                state.note("run_loop stopped: no-progress loop detected")
+            loop_suggestion = context.detect_loop(observations)
+            if loop_suggestion is not None:
+                state.note(f"run_loop stopped: {loop_suggestion}")
                 tracer.log(output="[loop detected]", level="WARNING")
-                return "[harness] stopped: no progress (loop detected)"
+                return f"[harness] stopped: {loop_suggestion}"
 
         state.note(f"run_loop hit max_iters={max_iters}")
         tracer.log(

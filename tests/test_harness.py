@@ -205,3 +205,27 @@ def test_converse_toggle_commands():
     assert mode.supervision_enabled is True
     assert any("plan mode" in o.lower() and "on" in o.lower() for o in outputs)
     assert any("supervision mode" in o.lower() and "on" in o.lower() for o in outputs)
+
+
+# Loop detection tests
+
+
+def test_loop_detection_stops_and_includes_suggestion(monkeypatch):
+    """When detect_loop fires, the harness stops and the suggestion appears in output."""
+    from agent import context
+
+    monkeypatch.setattr(
+        context, "detect_loop", lambda obs, **kw: "Try a different file."
+    )
+
+    state = TaskState(request="x")
+    spy = _SpyTool()
+    llm.set_mock_script(
+        [
+            LLMResponse(tool_calls=[ToolCall(id="1", name="spy", arguments={})]),
+            # Would continue, but loop detection should stop it before iteration 2.
+        ]
+    )
+    result = harness.run_loop("agent", [spy], state, "go")
+    assert "stopped" in result
+    assert "Try a different file" in result
