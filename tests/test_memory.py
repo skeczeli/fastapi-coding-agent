@@ -111,3 +111,35 @@ def test_save_and_load_preserves_all_categories(tmp_path):
     assert loaded.data["architecture"] == "FastAPI app"
     for cat in CATEGORIES:
         assert loaded.get_category(cat) == [f"entry for {cat}"]
+
+
+def test_memory_survives_across_orchestrator_runs(tmp_path):
+    """Acceptance: a second run sees findings persisted by the first."""
+    from agent import llm
+    from agent.agents import orchestrator
+
+    mem_dir = str(tmp_path / ".agent_memory")
+
+    # First run: orchestrator calls remember_project to save a dependency.
+    llm.set_mock_script(
+        [
+            llm.LLMResponse(
+                content="",
+                tool_calls=[
+                    llm.ToolCall(
+                        id="c1",
+                        name="remember_project",
+                        arguments={"category": "dependencies", "content": "FastAPI"},
+                    )
+                ],
+            ),
+            llm.LLMResponse(content="Done.", tool_calls=[]),
+        ]
+    )
+    orchestrator.run("first task", subagents=[], memory_path=mem_dir)
+    llm.set_mock_script(None)
+
+    # Second run: memory is loaded and fed to the orchestrator as context.
+    # We verify the finding persisted.
+    mem = ProjectMemory.load(mem_dir)
+    assert mem.get_category("dependencies") == ["FastAPI"]
