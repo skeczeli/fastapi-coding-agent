@@ -167,3 +167,60 @@ def test_orchestrator_includes_remember_project_tool():
     roster = [_StubSubagent(n) for n in ("explorer", "researcher", "implementer", "tester", "reviewer")]
     state = orchestrator.run("task", subagents=roster)
     assert "unknown tool" not in state.subagent_results.get("orchestrator", "")
+
+
+# --- CLI entrypoint (#I1) ---------------------------------------------------
+
+
+def test_render_state_shows_sources_with_origin_labels():
+    state = TaskState(request="add GET /health")
+    state.subagent_results["orchestrator"] = "Done."
+    state.add_source("rag", "tutorial/first-steps.md", score=0.91)
+    state.add_source("web", "https://fastapi.tiangolo.com/")
+    state.files_modified.append("app/main.py")
+    state.subagent_results["explorer"] = "FastAPI app with one router"
+
+    report = orchestrator.render_state(state)
+
+    # Origin labels are surfaced (the assignment's "differentiate origin" rule).
+    assert "[rag] tutorial/first-steps.md" in report
+    assert "score=0.91" in report
+    assert "[web] https://fastapi.tiangolo.com/" in report
+    assert "app/main.py" in report
+    assert "explorer: FastAPI app with one router" in report
+    assert "Done." in report
+
+
+def test_render_state_handles_empty_state():
+    report = orchestrator.render_state(TaskState(request="noop"))
+    assert "Sources consulted: (none)" in report
+    assert "Files modified: (none)" in report
+
+
+def test_main_runs_end_to_end_in_mock(monkeypatch, capsys):
+    monkeypatch.setenv("AGENT_LLM_MOCK", "1")
+    llm.set_mock_script([_text("All done: added GET /health.")])
+
+    rc = orchestrator.main(["add", "a", "GET", "/health", "--max-iters", "3"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "ORCHESTRATOR RESULT" in out
+    assert "All done: added GET /health." in out
+
+
+def test_main_reports_halt_with_exit_code_2(monkeypatch, capsys):
+    monkeypatch.setenv("AGENT_LLM_MOCK", "1")
+    # A subagent-tool call that loops the orchestrator into the stop sentinel.
+    state_summary = "[harness] stopped: reached max iterations"
+    monkeypatch.setattr(orchestrator, "run", lambda *a, **k: _halted_state(state_summary))
+
+    rc = orchestrator.main(["do", "something"])
+    assert rc == 2
+    assert "ORCHESTRATOR RESULT" in capsys.readouterr().out
+
+
+def _halted_state(summary: str) -> TaskState:
+    state = TaskState(request="do something")
+    state.subagent_results["orchestrator"] = summary
+    return state

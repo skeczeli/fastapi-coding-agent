@@ -248,3 +248,155 @@ def run(
         state.progress.append(f"orchestrator done: {summary}")
     mem.save(memory_path)
     return state
+
+
+# --------------------------------------------------------------------------- #
+# CLI entrypoint (#I1) — `python -m agent.agents.orchestrator "<task>"`
+# The multi-agent counterpart to `python -m agent` (single agent).
+# --------------------------------------------------------------------------- #
+
+
+def _section(title: str, body: list[str]) -> list[str]:
+    """A titled block for the report, or a '(none)' placeholder if empty."""
+    if not body:
+        return [f"\n{title}: (none)"]
+    return [f"\n{title}:", *body]
+
+
+def render_state(state: TaskState) -> str:
+    """Render the final ``TaskState`` as a human-readable report.
+
+    Surfaces what the assignment asks a run to show: the orchestrator's answer,
+    the sources consulted *with their origin labels* (rag / web / repo / memory /
+    inference), the files touched, what each subagent reported, and the
+    delegation/progress log. Pure (returns a string) so it's easy to test.
+    """
+    lines = ["=" * 70, "ORCHESTRATOR RESULT", "=" * 70, f"\nRequest: {state.request}"]
+
+    summary = state.subagent_results.get("orchestrator", "")
+    if summary:
+        lines.append(f"\nFinal answer:\n{summary}")
+
+    sources = [
+        f"  - [{s.origin}] {s.ref}"
+        + (f"  (score={s.score:.2f})" if s.score is not None else "")
+        for s in state.sources
+    ]
+    lines += _section("Sources consulted", sources)
+
+    files = [f"  - {f}" for f in state.files_modified]
+    lines += _section("Files modified", files)
+
+    results = [
+        f"  - {name}: {_truncate(str(result))}"
+        for name, result in state.subagent_results.items()
+        if name != "orchestrator"
+    ]
+    lines += _section("Per-subagent results", results)
+
+    lines += _section("Progress log", [f"  {p}" for p in state.progress])
+    lines += _section("Observations", [f"  - {o}" for o in state.observations])
+
+    lines.append("\n" + "=" * 70)
+    return "\n".join(lines)
+
+
+def _truncate(text: str, limit: int = 300) -> str:
+    """Clip long subagent results so the report stays scannable."""
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def _build_parser() -> "argparse.ArgumentParser":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="python -m agent.agents.orchestrator",
+        description="Run the multi-agent FastAPI coding agent on a task.",
+    )
+    parser.add_argument("task", nargs="+", help="The coding task for the agent to perform.")
+    parser.add_argument(
+        "--max-iters", type=int, default=25, help="Orchestration step cap (default: 25)."
+    )
+    parser.add_argument(
+        "--memory-path",
+        default=".agent_memory",
+        help="Where per-project memory is persisted (default: .agent_memory/).",
+    )
+    return parser
+
+
+def _report_api_error(err: Exception) -> int:
+    """Turn a crashed run into a readable message instead of a traceback.
+
+    Recognizes the common OpenAI failure modes (no credit, bad key, rate limit)
+    and prints what to do about each; anything else is shown verbatim. Always
+    returns exit code ``1`` so scripts can detect the failure.
+    """
+    text = str(err)
+    if "insufficient_quota" in text or "exceeded your current quota" in text:
+        hint = (
+            "OpenAI account has no credit (insufficient_quota). Add billing at "
+            "https://platform.openai.com/account/billing or use a funded API key."
+        )
+    elif "invalid_api_key" in text or "Incorrect API key" in text:
+        hint = "OpenAI rejected the API key. Check OPENAI_API_KEY in your .env."
+    elif "rate_limit" in text.lower():
+        hint = "Hit the OpenAI rate limit. Wait a moment and retry."
+    else:
+        hint = f"Unexpected error: {type(err).__name__}: {text}"
+    print(f"\n[run failed] {hint}")
+    return 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Entry point for ``python -m agent.agents.orchestrator "<task>"``.
+
+    Loads ``.env``, installs the Langfuse tracer if configured, runs the
+    orchestrator over the five real subagents, prints the final ``TaskState``
+    report, and flushes traces before exit. Returns ``0`` on a clean finish,
+    ``2`` if the run halted on a loop / iteration cap, ``1`` on a config error.
+    """
+    import os
+
+    # Load .env so OPENAI / TAVILY / LANGFUSE keys are present before any call.
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+    except ImportError:
+        pass
+
+    from agent import observability
+
+    args = _build_parser().parse_args(argv)
+    request = " ".join(args.task)
+
+    if not os.getenv("AGENT_LLM_MOCK") and not os.getenv("OPENAI_API_KEY"):
+        print(
+            "No OPENAI_API_KEY found. Add it to .env (see .env.example), or set "
+            "AGENT_LLM_MOCK=1 to run the loop offline with canned responses."
+        )
+        return 1
+
+    tracer = observability.init_tracer()
+    tracing_on = not isinstance(tracer, observability.NoopTracer)
+    print(f"Observability: {'Langfuse trace on' if tracing_on else 'off (no LANGFUSE keys)'}")
+    print(f"Task: {request}\n")
+
+    try:
+        state = run(request, max_iters=args.max_iters, memory_path=args.memory_path)
+    except Exception as err:  # noqa: BLE001 — CLI boundary: report, don't crash.
+        observability.flush()
+        return _report_api_error(err)
+    finally:
+        # Flush buffered traces so the run shows up in Langfuse before exit.
+        observability.flush()
+
+    print(render_state(state))
+
+    halted = str(state.subagent_results.get("orchestrator", "")).startswith("[harness] stopped:")
+    return 2 if halted else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
