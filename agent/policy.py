@@ -13,6 +13,19 @@ from typing import Callable
 from agent.config import Config
 from agent.tools import Tool
 
+# Process-wide approval handler for ``require_approval`` commands. ``check`` falls
+# back to this when the caller doesn't pass an explicit ``approval_fn`` — so the
+# CLI can wire one confirm-before-run prompt that reaches every loop (orchestrator
+# and subagents), without threading the callback through each ``Subagent.run``.
+# ``None`` (e.g. in tests) → such commands are denied instead of prompting.
+_default_approval_fn: Callable[[str], bool] | None = None
+
+
+def set_approval_fn(fn: Callable[[str], bool] | None) -> None:
+    """Install the process-wide approval handler used by ``check`` (see above)."""
+    global _default_approval_fn
+    _default_approval_fn = fn
+
 
 def _glob_to_regex(pattern: str) -> re.Pattern[str]:
     """Convert a glob pattern (with ``**`` support) to a compiled regex."""
@@ -150,11 +163,13 @@ def check(
                     command, config.commands.require_approval
                 )
                 if matched:
-                    if approval_fn is None:
+                    # Use the explicit handler if given, else the process-wide default.
+                    handler = approval_fn if approval_fn is not None else _default_approval_fn
+                    if handler is None:
                         return (
                             f"command requires approval (no approval handler): {matched}"
                         )
-                    if not approval_fn(f"run command: {command}"):
+                    if not handler(f"run command: {command}"):
                         return f"command rejected by user: {matched}"
 
     return None

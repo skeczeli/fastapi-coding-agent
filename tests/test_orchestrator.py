@@ -167,3 +167,88 @@ def test_orchestrator_includes_remember_project_tool():
     roster = [_StubSubagent(n) for n in ("explorer", "researcher", "implementer", "tester", "reviewer")]
     state = orchestrator.run("task", subagents=roster)
     assert "unknown tool" not in state.subagent_results.get("orchestrator", "")
+
+
+# --- CLI entrypoint (#I1) ---------------------------------------------------
+
+
+def test_render_state_shows_sources_with_origin_labels():
+    state = TaskState(request="add GET /health")
+    state.subagent_results["orchestrator"] = "Done."
+    state.add_source("rag", "tutorial/first-steps.md", score=0.91)
+    state.add_source("web", "https://fastapi.tiangolo.com/")
+    state.files_modified.append("app/main.py")
+    state.subagent_results["explorer"] = "FastAPI app with one router"
+
+    report = orchestrator.render_state(state)
+
+    # Origin labels are surfaced (the assignment's "differentiate origin" rule).
+    assert "[rag] tutorial/first-steps.md" in report
+    assert "score=0.91" in report
+    assert "[web] https://fastapi.tiangolo.com/" in report
+    assert "app/main.py" in report
+    assert "explorer: FastAPI app with one router" in report
+    assert "Done." in report
+
+
+def test_render_state_handles_empty_state():
+    report = orchestrator.render_state(TaskState(request="noop"))
+    assert "Sources consulted: (none)" in report
+    assert "Files modified: (none)" in report
+
+
+def test_render_state_dedups_repeated_sources():
+    # The Researcher records the same chunk many times; the report shows it once,
+    # keeping the best score.
+    state = TaskState(request="x")
+    state.add_source("rag", "tutorial/deps.md > Global Dependencies", score=0.80)
+    state.add_source("rag", "tutorial/deps.md > Global Dependencies", score=0.88)
+    state.add_source("rag", "tutorial/deps.md > Global Dependencies", score=0.81)
+
+    report = orchestrator.render_state(state)
+    line = "[rag] tutorial/deps.md > Global Dependencies"
+    assert report.count(line) == 1          # collapsed to a single entry
+    assert "score=0.88" in report           # kept the best score
+
+
+def test_run_records_loaded_memory_as_sources(tmp_path):
+    # A prior run persisted memory; the next run tags it as origin="memory" so a
+    # memory-grounded answer shows its evidence instead of "(none)".
+    mem_dir = str(tmp_path / ".agent_memory")
+    mem = ProjectMemory(path=mem_dir)
+    mem.set_architecture("FastAPI app with routers")
+    mem.save(mem_dir)
+
+    state = orchestrator.run("recall the architecture", memory_path=mem_dir)
+    mem_sources = [s for s in state.sources if s.origin == "memory"]
+    assert any("architecture" in s.ref for s in mem_sources)
+    assert "[memory]" in orchestrator.render_state(state)
+
+
+def test_main_runs_end_to_end_in_mock(monkeypatch, capsys):
+    monkeypatch.setenv("AGENT_LLM_MOCK", "1")
+    llm.set_mock_script([_text("All done: added GET /health.")])
+
+    rc = orchestrator.main(["add", "a", "GET", "/health", "--max-iters", "3"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "ORCHESTRATOR RESULT" in out
+    assert "All done: added GET /health." in out
+
+
+def test_main_reports_halt_with_exit_code_2(monkeypatch, capsys):
+    monkeypatch.setenv("AGENT_LLM_MOCK", "1")
+    # A subagent-tool call that loops the orchestrator into the stop sentinel.
+    state_summary = "[harness] stopped: reached max iterations"
+    monkeypatch.setattr(orchestrator, "run", lambda *a, **k: _halted_state(state_summary))
+
+    rc = orchestrator.main(["do", "something"])
+    assert rc == 2
+    assert "ORCHESTRATOR RESULT" in capsys.readouterr().out
+
+
+def _halted_state(summary: str) -> TaskState:
+    state = TaskState(request="do something")
+    state.subagent_results["orchestrator"] = summary
+    return state

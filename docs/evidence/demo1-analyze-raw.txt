@@ -1,0 +1,359 @@
+Observability: off (no LANGFUSE keys)
+Task: Analyze ONLY the FastAPI project inside ./workspace/. Everything outside ./workspace/ (the agent's own repo, root CLAUDE.md/README.md) is NOT part of the analysis — ignore it.
+
+WORK EFFICIENTLY — this is critical to avoid running out of iterations:
+- Explore in ONE pass. Run list_files on ./workspace and ./workspace/app/routers, then read each of these files EXACTLY ONCE: ./workspace/app/main.py, ./workspace/app/dependencies.py, ./workspace/app/routers/items.py, ./workspace/app/routers/users.py. NEVER re-read a file you already read.
+- Do AT MOST ONE rag_search, query 'FastAPI global and router-level dependencies with Depends'. Do not repeat searches.
+- After that, immediately SYNTHESIZE the final report. Do NOT keep exploring or researching.
+
+Deliver: (1) architecture — the routers, the global dependency wired in main.py, and the structure; (2) how its dependency-based auth works (get_query_token / get_token_header in dependencies.py, applied via Depends), grounded in the official FastAPI docs on dependencies. Read-only — do NOT modify any files.
+
+======================================================================
+ORCHESTRATOR RESULT
+======================================================================
+
+Request: Analyze ONLY the FastAPI project inside ./workspace/. Everything outside ./workspace/ (the agent's own repo, root CLAUDE.md/README.md) is NOT part of the analysis — ignore it.
+
+WORK EFFICIENTLY — this is critical to avoid running out of iterations:
+- Explore in ONE pass. Run list_files on ./workspace and ./workspace/app/routers, then read each of these files EXACTLY ONCE: ./workspace/app/main.py, ./workspace/app/dependencies.py, ./workspace/app/routers/items.py, ./workspace/app/routers/users.py. NEVER re-read a file you already read.
+- Do AT MOST ONE rag_search, query 'FastAPI global and router-level dependencies with Depends'. Do not repeat searches.
+- After that, immediately SYNTHESIZE the final report. Do NOT keep exploring or researching.
+
+Deliver: (1) architecture — the routers, the global dependency wired in main.py, and the structure; (2) how its dependency-based auth works (get_query_token / get_token_header in dependencies.py, applied via Depends), grounded in the official FastAPI docs on dependencies. Read-only — do NOT modify any files.
+
+Final answer:
+**FastAPI Project Overview (./workspace)**  
+
+| Component | Location | Role |
+|-----------|----------|------|
+| **Application entry point** | `app/main.py` | Instantiates the FastAPI app, registers global dependencies, and includes routers. |
+| **Dependency helpers** | `app/dependencies.py` | Defines two simple auth‑style dependencies: `get_query_token` (query‑string) and `get_token_header` (header). |
+| **Routers** | `app/routers/items.py` <br> `app/routers/users.py` | `items.py` – router with its own dependency (`get_token_header`). <br> `users.py` – router with no extra dependencies. |
+| **Internal admin router** (imported but not listed in the explicit file list) | `app/internal/admin.py` | Demonstrates that a router can also receive dependencies when it is *included* in `main.py`. |
+| **Directory layout** | `./workspace/app/` | Standard FastAPI layout – `main.py`, a `dependencies.py` module, an `internal/` package, and a `routers/` package. |
+
+---
+
+### 1. Architecture – routers, global dependency, and structure  
+
+**File: `app/main.py`** (excerpt)  
+
+```python
+from fastapi import Depends, FastAPI
+from .dependencies import get_query_token, get_token_header
+from .internal import admin
+from .routers import items, users
+
+app = FastAPI(dependencies=[Depends(get_query_token)])   # ← **global dependency**
+
+app.include_router(users.router)                         # users router – no extra deps
+app.include_router(items.router)                         # items router – its own deps
+app.include_router(
+    admin.router,
+    prefix="/admin",
+    tags=["admin"],
+    dependencies=[Depends(get_token_header)],           # router‑level (include‑time) dep
+    responses={418: {"description": "I'm a teapot"}},
+)
+```
+
+* **Global dependency** – `Depends(get_query_token)` is passed to the `FastAPI` constructor.  
+  This makes `get_query_token` run **for every request** in the entire app, even if the endpoint does not explicitly receive its return value.  
+
+* **Router inclusion** – `users.router` and `items.router` are added with `app.include_router`.  
+  `items.router` already defines its own dependencies (see below).  
+  The `admin.router` is added with an extra `dependencies=[Depends(get_token_header)]` argument; this is **router‑level** (applied at include time) and will be merged with any dependencies the router itself may have.  
+
+* **Directory layout** – The project follows the conventional FastAPI pattern: a top‑level `app/` package, a `routers/` sub‑package for grouped endpoints, an `internal/` sub‑package for auxiliary routers, and a dedicated `dependencies.py` module for shared dependency functions.  
+
+---
+
+### 2. Dependency‑based authentication – how it works  
+
+**File: `app/dependencies.py`**  
+
+```python
+async def get_token_header(x_token: Annotated[str, Header()]):
+    if x_token != "fake-super-secret-token":
+        raise HTTPException(status_code=400, detail="X-Token header invalid")
+
+async def get_query_token(token: str):
+    if token != "jessica":
+        raise HTTPException(status_code=400, detail="No Jessica token provided")
+```
+
+* `get_query_token` reads a **query‑string parameter** named `token`. If the value is not `"jessica"` it raises a `400` error. Because it is registered globally (`FastAPI(dependencies=[Depends(get_query_token)])`), **every incoming request** must contain `?token=jessica` (or it will be rejected).  
+
+* `get_token_header` reads an **HTTP header** `X-Token`. If the header value is not `"fake-super-secret-token"` it raises a `400` error. This dependency is attached to the **items router** and the **admin router** (see below), so only the routes under those routers require the correct header.  
+
+**File: `app/routers/items.py`**  
+
+```python
+router = APIRouter(
+    prefix="/items",
+    tags=["items"],
+    dependencies=[Depends(get_token_header)],   # ← router‑level dependency
+    responses={404: {"description": "Not found"}},
+)
+```
+
+* All `/items/*` endpoints automatically run `get_token_header` before the handler. The handler itself does **not** receive the dependency’s return value (the function returns nothing), but the call enforces the header check.
+
+**File: `app/routers/users.py`**  
+
+* No `dependencies=` argument – the user endpoints are **not protected** by any auth dependency. They inherit only the global `get_query_token` check (i.e., they still need the `token=jessica` query param, but no `X-Token` header).
+
+**How FastAPI processes these dependencies** (official docs, RAG source)  
+
+| Scope | Declaration | Effect (FastAPI docs) |
+|------|--------------|-----------------------|
+| **Global** | `FastAPI(dependencies=[Depends(dep)])` | Runs for **every** request in the app (docs: *global dependencies*). |
+| **Router‑level** | `APIRouter(..., dependencies=[Depends(dep)])` | Runs for **all** routes defined in that router (docs: *router‑level dependencies*). |
+| **Include‑time** | `app.include_router(router, dependencies=[Depends(dep)])` | Merges with the router’s own dependencies; useful for adding extra checks when mounting a router (docs: *include‑time dependencies*). |
+| **Path‑operation** | `@router.get(..., dependencies=[Depends(dep)])` | Runs only for that specific endpoint. |
+
+* The dependencies are called **even when their return value is discarded**; this is perfect for validation or authentication steps that raise an exception on failure.  
+
+* In this project, **authentication** is implemented by two simple checks:  
+
+  1. **Global query‑token** – required for *all* endpoints.  
+  2. **Header token** – required only for the `items` router (and the admin router via `include_router`).  
+
+If either check fails, FastAPI returns a `400 Bad Request` with the appropriate error message, preventing the actual route handler from executing.
+
+---
+
+### Sources  
+
+| Source | Origin |
+|--------|--------|
+| File contents of `app/main.py`, `app/dependencies.py`, `app/routers/items.py`, `app/routers/users.py` | **Explorer** (repo files) |
+| FastAPI documentation excerpts on *global dependencies*, *router‑level dependencies*, and *include‑time dependencies* | **RAG** (official FastAPI docs) |
+| Interpretation of how `Depends` works when the return value is ignored (e.g., “dependencies list executed but values not used”) | **Inference** (based on FastAPI design) |
+
+---
+
+**Summary**  
+
+The project follows a classic FastAPI structure: a single `FastAPI` app instance with a **global query‑parameter dependency** (`get_query_token`). Two routers are defined—`users` (no extra deps) and `items` (router‑level header dependency `get_token_header`). An additional internal `admin` router is included with the same header dependency at include time. The authentication mechanism is purely based on FastAPI’s dependency system: missing or incorrect tokens raise `HTTPException`, short‑circuiting the request before any endpoint logic runs. This design leverages FastAPI’s built‑in support for global, router‑level, and include‑time dependencies, as described in the official documentation.
+
+Sources consulted:
+  - [repo] ./workspace/app/main.py
+  - [repo] ./workspace/app/dependencies.py
+  - [repo] ./workspace/app/routers/items.py
+  - [repo] ./workspace/app/routers/users.py
+  - [rag] index.md > FastAPI > Dependencies  (score=0.82)
+  - [rag] tutorial/dependencies/global-dependencies.md > Global Dependencies  (score=0.80)
+  - [rag] tutorial/dependencies/dependencies-in-path-operation-decorators.md > Dependencies in path operation decorators > Global Dependencies  (score=0.80)
+  - [rag] reference/dependencies.md > Dependencies - `Depends()` and `Security()` > `Depends()`  (score=0.77)
+  - [rag] release-notes.md > Release Notes > 0.121.1 (2025-11-08) > Fixes  (score=0.76)
+  - [rag] features.md > A Pydantic model > Dependency Injection  (score=0.76)
+  - [rag] tutorial/bigger-applications.md > Bigger Applications - Multiple Files > The main `FastAPI` > Import `FastAPI`  (score=0.76)
+  - [rag] reference/dependencies.md > Dependencies - `Depends()` and `Security()` > `Security()`  (score=0.75)
+  - [rag] tutorial/dependencies/index.md > Dependencies  (score=0.75)
+  - [rag] tutorial/dependencies/index.md > Dependencies > **FastAPI** plug-ins  (score=0.75)
+  - [rag] tutorial/dependencies/global-dependencies.md > Global Dependencies  (score=0.80)
+  - [rag] index.md > FastAPI > Dependencies  (score=0.79)
+  - [rag] tutorial/dependencies/dependencies-in-path-operation-decorators.md > Dependencies in path operation decorators > Global Dependencies  (score=0.78)
+  - [rag] features.md > A Pydantic model > Dependency Injection  (score=0.76)
+  - [rag] tutorial/bigger-applications.md > Bigger Applications - Multiple Files > The main `FastAPI` > Import `FastAPI`  (score=0.76)
+  - [rag] tutorial/dependencies/global-dependencies.md > Global Dependencies  (score=0.81)
+  - [rag] release-notes.md > Release Notes > 0.22.0 (2019-05-16)  (score=0.80)
+  - [rag] tutorial/dependencies/dependencies-in-path-operation-decorators.md > Dependencies in path operation decorators > Add `dependencies` to the *path operation decorator*  (score=0.78)
+  - [rag] tutorial/dependencies/dependencies-in-path-operation-decorators.md > Dependencies in path operation decorators  (score=0.78)
+  - [rag] tutorial/dependencies/dependencies-in-path-operation-decorators.md > Dependencies in path operation decorators > Dependencies errors and return values  (score=0.77)
+  - [rag] release-notes.md > Release Notes > 0.115.5 (2024-11-12) > Docs  (score=0.75)
+  - [rag] tutorial/dependencies/dependencies-in-path-operation-decorators.md > Dependencies in path operation decorators > Dependencies for a group of *path operations*  (score=0.75)
+  - [rag] release-notes.md > Release Notes > 0.137.0 (2026-06-14) > Breaking Changes > Non Objectives  (score=0.75)
+  - [rag] tutorial/dependencies/dependencies-in-path-operation-decorators.md > Dependencies in path operation decorators > Dependencies errors and return values > Dependency requirements  (score=0.75)
+  - [rag] tutorial/dependencies/dependencies-in-path-operation-decorators.md > Dependencies in path operation decorators > Dependencies errors and return values > Return values  (score=0.74)
+  - [rag] release-notes.md > Release Notes > 0.62.0 (2020-11-29) > Features  (score=0.74)
+  - [rag] tutorial/dependencies/global-dependencies.md > Global Dependencies  (score=0.82)
+  - [rag] tutorial/dependencies/dependencies-in-path-operation-decorators.md > Dependencies in path operation decorators > Global Dependencies  (score=0.82)
+  - [rag] index.md > FastAPI > Dependencies  (score=0.80)
+  - [rag] tutorial/bigger-applications.md > Bigger Applications - Multiple Files > The main `FastAPI` > Import `FastAPI`  (score=0.78)
+  - [rag] advanced/dataclasses.md > Using Dataclasses > Version  (score=0.77)
+  - [rag] release-notes.md > Release Notes > 0.62.0 (2020-11-29) > Features  (score=0.82)
+  - [rag] release-notes.md > Release Notes > 0.22.0 (2019-05-16)  (score=0.81)
+  - [rag] release-notes.md > Release Notes > 0.62.0 (2020-11-29) > Features  (score=0.81)
+  - [rag] tutorial/bigger-applications.md > Bigger Applications - Multiple Files > The main `FastAPI` > Include the `APIRouter`s for `users` and `items`  (score=0.80)
+  - [rag] tutorial/bigger-applications.md > Bigger Applications - Multiple Files > The main `FastAPI` > Include an `APIRouter` with a custom `prefix`, `tags`, `responses`, and `dependencies`  (score=0.79)
+  - [rag] release-notes.md > Release Notes > 0.128.7 (2026-02-10) > Features  (score=0.79)
+  - [rag] tutorial/bigger-applications.md > Bigger Applications - Multiple Files > Include an `APIRouter` in another  (score=0.78)
+  - [rag] tutorial/dependencies/index.md > Dependencies > **FastAPI** plug-ins  (score=0.78)
+  - [rag] reference/apirouter.md > `APIRouter` class  (score=0.78)
+  - [rag] release-notes.md > Release Notes > 0.137.0 (2026-06-14) > Breaking Changes  (score=0.77)
+  - [rag] advanced/advanced-dependencies.md > Advanced Dependencies  (score=0.79)
+  - [rag] release-notes.md > Release Notes > 0.62.0 (2020-11-29) > Features  (score=0.78)
+  - [rag] release-notes.md > Release Notes > 0.22.0 (2019-05-16)  (score=0.77)
+  - [rag] reference/dependencies.md > Dependencies - `Depends()` and `Security()`  (score=0.73)
+  - [rag] tutorial/bigger-applications.md > Bigger Applications - Multiple Files > The main `FastAPI` > Include an `APIRouter` with a custom `prefix`, `tags`, `responses`, and `dependencies`  (score=0.73)
+  - [rag] tutorial/bigger-applications.md > Bigger Applications - Multiple Files > Another module with `APIRouter` > Import the dependencies  (score=0.73)
+  - [rag] tutorial/dependencies/global-dependencies.md > Global Dependencies  (score=0.80)
+  - [rag] index.md > FastAPI > Example  (score=0.80)
+  - [rag] tutorial/dependencies/dependencies-in-path-operation-decorators.md > Dependencies in path operation decorators > Global Dependencies  (score=0.79)
+  - [rag] tutorial/bigger-applications.md > Bigger Applications - Multiple Files > The main `FastAPI` > Import `FastAPI`  (score=0.78)
+  - [rag] advanced/dataclasses.md > Using Dataclasses > Version  (score=0.77)
+  - [rag] features.md > A Pydantic model > Dependency Injection  (score=0.77)
+  - [rag] index.md > FastAPI > Dependencies  (score=0.77)
+  - [rag] tutorial/dependencies/index.md > Dependencies > First Steps > Create a dependency, or "dependable"  (score=0.76)
+  - [rag] tutorial/dependencies/index.md > Dependencies > **FastAPI** plug-ins  (score=0.76)
+  - [rag] deployment/docker.md > CMD ["fastapi", "run", "app/main.py", "--port", "80", "--proxy-headers"] > Build a Docker Image for FastAPI > Create the **FastAPI** Code  (score=0.76)
+  - [rag] advanced/advanced-dependencies.md > Advanced Dependencies  (score=0.77)
+  - [rag] reference/dependencies.md > Dependencies - `Depends()` and `Security()`  (score=0.76)
+  - [rag] tutorial/dependencies/global-dependencies.md > Global Dependencies  (score=0.76)
+  - [rag] tutorial/dependencies/dependencies-with-yield.md > Dependencies with yield > Context Managers  (score=0.76)
+  - [rag] release-notes.md > Release Notes > 0.115.5 (2024-11-12) > Docs  (score=0.74)
+  - [rag] tutorial/dependencies/dependencies-in-path-operation-decorators.md > Dependencies in path operation decorators  (score=0.83)
+  - [rag] tutorial/dependencies/dependencies-in-path-operation-decorators.md > Dependencies in path operation decorators > Dependencies errors and return values  (score=0.83)
+  - [rag] tutorial/dependencies/dependencies-in-path-operation-decorators.md > Dependencies in path operation decorators > Add `dependencies` to the *path operation decorator*  (score=0.83)
+  - [rag] tutorial/dependencies/dependencies-in-path-operation-decorators.md > Dependencies in path operation decorators > Dependencies for a group of *path operations*  (score=0.81)
+  - [rag] tutorial/dependencies/dependencies-in-path-operation-decorators.md > Dependencies in path operation decorators > Dependencies errors and return values > Return values  (score=0.80)
+  - [rag] tutorial/dependencies/global-dependencies.md > Global Dependencies  (score=0.80)
+
+Files modified: (none)
+
+Per-subagent results:
+  - explorer: ```json
+{
+  "workspace": [
+    "app/",
+    ".gitignore",
+    "Dockerfile",
+    "LICENSE",
+    "pyproject.toml",
+    "README.md",
+    "uv.lock"
+  ],
+  "routers": [
+    "__init__.py",
+    "items.py",
+    "users.py"
+  ],
+  "app/main.py": "from fastapi import Depends, FastAPI\n\nfrom .dependencies impor…
+  - researcher: **FastAPI global dependencies**
+
+- The docs describe “global dependencies” as a way to add a dependency that runs for **every path operation** in the whole application.  
+  > “For some types of applications you might want to add dependencies to the whole application… you can add `dependencies` to th…
+
+Progress log:
+  → explorer: List the files in ./workspace and ./workspace/app/routers directories, then read the contents of ./workspace/app/main.py, ./workspace/app/dependencies.py, ./workspace/app/routers/items.py, and ./workspace/app/routers/users.py. Return a JSON object with the directory listings and each file's content. Do not read any file more than once.
+  → researcher: Search for FastAPI documentation on global and router-level dependencies using Depends. Provide relevant excerpts and cite origins (rag / web / inference).
+  orchestrator done: **FastAPI Project Overview (./workspace)**  
+
+| Component | Location | Role |
+|-----------|----------|------|
+| **Application entry point** | `app/main.py` | Instantiates the FastAPI app, registers global dependencies, and includes routers. |
+| **Dependency helpers** | `app/dependencies.py` | Defines two simple auth‑style dependencies: `get_query_token` (query‑string) and `get_token_header` (header). |
+| **Routers** | `app/routers/items.py` <br> `app/routers/users.py` | `items.py` – router with its own dependency (`get_token_header`). <br> `users.py` – router with no extra dependencies. |
+| **Internal admin router** (imported but not listed in the explicit file list) | `app/internal/admin.py` | Demonstrates that a router can also receive dependencies when it is *included* in `main.py`. |
+| **Directory layout** | `./workspace/app/` | Standard FastAPI layout – `main.py`, a `dependencies.py` module, an `internal/` package, and a `routers/` package. |
+
+---
+
+### 1. Architecture – routers, global dependency, and structure  
+
+**File: `app/main.py`** (excerpt)  
+
+```python
+from fastapi import Depends, FastAPI
+from .dependencies import get_query_token, get_token_header
+from .internal import admin
+from .routers import items, users
+
+app = FastAPI(dependencies=[Depends(get_query_token)])   # ← **global dependency**
+
+app.include_router(users.router)                         # users router – no extra deps
+app.include_router(items.router)                         # items router – its own deps
+app.include_router(
+    admin.router,
+    prefix="/admin",
+    tags=["admin"],
+    dependencies=[Depends(get_token_header)],           # router‑level (include‑time) dep
+    responses={418: {"description": "I'm a teapot"}},
+)
+```
+
+* **Global dependency** – `Depends(get_query_token)` is passed to the `FastAPI` constructor.  
+  This makes `get_query_token` run **for every request** in the entire app, even if the endpoint does not explicitly receive its return value.  
+
+* **Router inclusion** – `users.router` and `items.router` are added with `app.include_router`.  
+  `items.router` already defines its own dependencies (see below).  
+  The `admin.router` is added with an extra `dependencies=[Depends(get_token_header)]` argument; this is **router‑level** (applied at include time) and will be merged with any dependencies the router itself may have.  
+
+* **Directory layout** – The project follows the conventional FastAPI pattern: a top‑level `app/` package, a `routers/` sub‑package for grouped endpoints, an `internal/` sub‑package for auxiliary routers, and a dedicated `dependencies.py` module for shared dependency functions.  
+
+---
+
+### 2. Dependency‑based authentication – how it works  
+
+**File: `app/dependencies.py`**  
+
+```python
+async def get_token_header(x_token: Annotated[str, Header()]):
+    if x_token != "fake-super-secret-token":
+        raise HTTPException(status_code=400, detail="X-Token header invalid")
+
+async def get_query_token(token: str):
+    if token != "jessica":
+        raise HTTPException(status_code=400, detail="No Jessica token provided")
+```
+
+* `get_query_token` reads a **query‑string parameter** named `token`. If the value is not `"jessica"` it raises a `400` error. Because it is registered globally (`FastAPI(dependencies=[Depends(get_query_token)])`), **every incoming request** must contain `?token=jessica` (or it will be rejected).  
+
+* `get_token_header` reads an **HTTP header** `X-Token`. If the header value is not `"fake-super-secret-token"` it raises a `400` error. This dependency is attached to the **items router** and the **admin router** (see below), so only the routes under those routers require the correct header.  
+
+**File: `app/routers/items.py`**  
+
+```python
+router = APIRouter(
+    prefix="/items",
+    tags=["items"],
+    dependencies=[Depends(get_token_header)],   # ← router‑level dependency
+    responses={404: {"description": "Not found"}},
+)
+```
+
+* All `/items/*` endpoints automatically run `get_token_header` before the handler. The handler itself does **not** receive the dependency’s return value (the function returns nothing), but the call enforces the header check.
+
+**File: `app/routers/users.py`**  
+
+* No `dependencies=` argument – the user endpoints are **not protected** by any auth dependency. They inherit only the global `get_query_token` check (i.e., they still need the `token=jessica` query param, but no `X-Token` header).
+
+**How FastAPI processes these dependencies** (official docs, RAG source)  
+
+| Scope | Declaration | Effect (FastAPI docs) |
+|------|--------------|-----------------------|
+| **Global** | `FastAPI(dependencies=[Depends(dep)])` | Runs for **every** request in the app (docs: *global dependencies*). |
+| **Router‑level** | `APIRouter(..., dependencies=[Depends(dep)])` | Runs for **all** routes defined in that router (docs: *router‑level dependencies*). |
+| **Include‑time** | `app.include_router(router, dependencies=[Depends(dep)])` | Merges with the router’s own dependencies; useful for adding extra checks when mounting a router (docs: *include‑time dependencies*). |
+| **Path‑operation** | `@router.get(..., dependencies=[Depends(dep)])` | Runs only for that specific endpoint. |
+
+* The dependencies are called **even when their return value is discarded**; this is perfect for validation or authentication steps that raise an exception on failure.  
+
+* In this project, **authentication** is implemented by two simple checks:  
+
+  1. **Global query‑token** – required for *all* endpoints.  
+  2. **Header token** – required only for the `items` router (and the admin router via `include_router`).  
+
+If either check fails, FastAPI returns a `400 Bad Request` with the appropriate error message, preventing the actual route handler from executing.
+
+---
+
+### Sources  
+
+| Source | Origin |
+|--------|--------|
+| File contents of `app/main.py`, `app/dependencies.py`, `app/routers/items.py`, `app/routers/users.py` | **Explorer** (repo files) |
+| FastAPI documentation excerpts on *global dependencies*, *router‑level dependencies*, and *include‑time dependencies* | **RAG** (official FastAPI docs) |
+| Interpretation of how `Depends` works when the return value is ignored (e.g., “dependencies list executed but values not used”) | **Inference** (based on FastAPI design) |
+
+---
+
+**Summary**  
+
+The project follows a classic FastAPI structure: a single `FastAPI` app instance with a **global query‑parameter dependency** (`get_query_token`). Two routers are defined—`users` (no extra deps) and `items` (router‑level header dependency `get_token_header`). An additional internal `admin` router is included with the same header dependency at include time. The authentication mechanism is purely based on FastAPI’s dependency system: missing or incorrect tokens raise `HTTPException`, short‑circuiting the request before any endpoint logic runs. This design leverages FastAPI’s built‑in support for global, router‑level, and include‑time dependencies, as described in the official documentation.
+
+Observations: (none)
+
+======================================================================

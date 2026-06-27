@@ -6,7 +6,7 @@ os.environ.setdefault("AGENT_LLM_MOCK", "1")  # never hit the real API in tests
 
 import pytest
 
-from agent import llm, tools
+from agent import llm, policy, tools
 
 
 @pytest.fixture(autouse=True)
@@ -35,3 +35,17 @@ def clear_mock_script():
         yield
     finally:
         llm.set_mock_script(None)
+
+
+@pytest.fixture(autouse=True)
+def clear_approval_fn():
+    """Reset the process-wide approval handler after each test.
+
+    The CLI's ``main()`` installs a stdin prompt via ``policy.set_approval_fn``;
+    without this reset it would leak into tests that expect no handler (and hang
+    on ``input()``).
+    """
+    try:
+        yield
+    finally:
+        policy.set_approval_fn(None)

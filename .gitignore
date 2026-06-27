@@ -22,6 +22,9 @@ env/
 chroma_db/
 docs/fastapi/
 
+# Demo target repo (cloned locally; see docs/PLAN-DEMOS.md)
+workspace/
+
 # Claude
 .claude/
 
