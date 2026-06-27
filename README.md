@@ -246,6 +246,14 @@ AGENT_LLM_MOCK=1 pytest -q        # suite completa, offline (sin API key)
 
 ---
 
+## Entrega / Evidencias
+
+La documentación completa de entrega (caso de uso detallado, arquitectura, base RAG,
+demos, observabilidad y reflexión) está en [`docs/INFORME.md`](./docs/INFORME.md).
+
+Las corridas raw y las capturas de observabilidad están en
+[`docs/evidence/`](./docs/evidence/).
+
 ## Estructura del proyecto
 
 ```

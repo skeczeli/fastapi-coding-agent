@@ -1,0 +1,14 @@
+Observability: Langfuse trace on
+Task: Analyze ONLY the FastAPI project inside ./workspace/. Read files ONLY under ./workspace/ — do NOT read anything outside it (not the agent's repo, not config/, not CLAUDE.md). Read-only: do not modify files. Explore in ONE pass — do NOT re-read files.
+
+You MUST use the Researcher to consult the FastAPI RAG documentation (it has to call rag_search) about global and router-level dependencies. Do NOT answer from your own knowledge — ground the explanation in the retrieved RAG sources.
+
+Deliver:
+1. architecture and key files,
+2. how global and router-level dependencies work in this app,
+3. the RAG sources actually used.
+
+Then persist durable findings to project memory using the remember_project tool, with SEPARATE calls for: architecture, important_files, dependencies, and conventions. The 'conventions' entry MUST state: every request to this app requires the query parameter token=jessica (enforced by the global get_query_token dependency); routes under the items and admin routers additionally require the header X-Token=fake-super-secret-token.
+
+
+[run failed] Unexpected error: RateLimitError: Error code: 429 - {'message': 'Tokens per day limit exceeded - too many tokens processed.', 'type': 'too_many_tokens_error', 'param': 'quota', 'code': 'token_quota_exceeded'}
