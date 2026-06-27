@@ -213,6 +213,11 @@ def run(
     state is returned for inspection (sources consulted, files modified,
     per-subagent results, progress log).
 
+    ``require_approval`` commands (run by the Tester/Implementer subagents) are
+    gated by the process-wide approval handler — set ``harness.set_approval_fn``
+    (the CLI wires a stdin prompt) to get confirm-before-run; otherwise they are
+    denied.
+
     Args:
         request: The user's coding task, verbatim.
         subagents: Roster to coordinate. Defaults to the standard five.
@@ -390,7 +395,7 @@ def main(argv: list[str] | None = None) -> int:
     except ImportError:
         pass
 
-    from agent import observability
+    from agent import observability, policy
 
     args = _build_parser().parse_args(argv)
     request = " ".join(args.task)
@@ -406,6 +411,17 @@ def main(argv: list[str] | None = None) -> int:
     tracing_on = not isinstance(tracer, observability.NoopTracer)
     print(f"Observability: {'Langfuse trace on' if tracing_on else 'off (no LANGFUSE keys)'}")
     print(f"Task: {request}\n")
+
+    # Confirm-before-run for require_approval commands (pip install, git commit, …).
+    # Set process-wide so it reaches the subagents' loops (where commands run).
+    def approval_fn(description: str) -> bool:
+        print(f"[approval required] {description}")
+        try:
+            return input("Approve? [y/n]: ").strip().lower() in ("y", "yes", "s", "si")
+        except (EOFError, KeyboardInterrupt):
+            return False
+
+    policy.set_approval_fn(approval_fn)
 
     try:
         state = run(request, max_iters=args.max_iters, memory_path=args.memory_path)

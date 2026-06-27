@@ -280,6 +280,33 @@ class TestRequireApproval:
         assert result is not None
         assert "no approval handler" in result
 
+    def test_uses_process_wide_default_when_no_explicit_fn(self):
+        # The CLI installs a default handler; check() falls back to it when the
+        # caller (e.g. a subagent's run_loop) passes no approval_fn.
+        from agent.policy import check, set_approval_fn
+
+        cfg = _config(commands=PolicyConfig(require_approval=["pip install*"]))
+        tool = _StubTool(permission="command")
+        try:
+            set_approval_fn(lambda _: True)
+            assert check(tool, {"command": "pip install requests"}, cfg) is None
+            set_approval_fn(lambda _: False)
+            assert "rejected" in check(tool, {"command": "pip install requests"}, cfg)
+        finally:
+            set_approval_fn(None)
+
+    def test_explicit_fn_overrides_default(self):
+        from agent.policy import check, set_approval_fn
+
+        cfg = _config(commands=PolicyConfig(require_approval=["pip install*"]))
+        tool = _StubTool(permission="command")
+        try:
+            set_approval_fn(lambda _: False)  # default would reject…
+            # …but the explicit handler wins.
+            assert check(tool, {"command": "pip install x"}, cfg, approval_fn=lambda _: True) is None
+        finally:
+            set_approval_fn(None)
+
     def test_deny_checked_before_approval(self):
         from agent.policy import check
 
