@@ -197,6 +197,34 @@ def test_render_state_handles_empty_state():
     assert "Files modified: (none)" in report
 
 
+def test_render_state_dedups_repeated_sources():
+    # The Researcher records the same chunk many times; the report shows it once,
+    # keeping the best score.
+    state = TaskState(request="x")
+    state.add_source("rag", "tutorial/deps.md > Global Dependencies", score=0.80)
+    state.add_source("rag", "tutorial/deps.md > Global Dependencies", score=0.88)
+    state.add_source("rag", "tutorial/deps.md > Global Dependencies", score=0.81)
+
+    report = orchestrator.render_state(state)
+    line = "[rag] tutorial/deps.md > Global Dependencies"
+    assert report.count(line) == 1          # collapsed to a single entry
+    assert "score=0.88" in report           # kept the best score
+
+
+def test_run_records_loaded_memory_as_sources(tmp_path):
+    # A prior run persisted memory; the next run tags it as origin="memory" so a
+    # memory-grounded answer shows its evidence instead of "(none)".
+    mem_dir = str(tmp_path / ".agent_memory")
+    mem = ProjectMemory(path=mem_dir)
+    mem.set_architecture("FastAPI app with routers")
+    mem.save(mem_dir)
+
+    state = orchestrator.run("recall the architecture", memory_path=mem_dir)
+    mem_sources = [s for s in state.sources if s.origin == "memory"]
+    assert any("architecture" in s.ref for s in mem_sources)
+    assert "[memory]" in orchestrator.render_state(state)
+
+
 def test_main_runs_end_to_end_in_mock(monkeypatch, capsys):
     monkeypatch.setenv("AGENT_LLM_MOCK", "1")
     llm.set_mock_script([_text("All done: added GET /health.")])

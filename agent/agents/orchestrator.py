@@ -225,6 +225,12 @@ def run(
     state = TaskState(request=request)
     mem = ProjectMemory.load(memory_path)
 
+    # Record loaded memory as consulted sources (origin="memory"), so attribution
+    # reflects what prior-run knowledge was injected into the agent's context —
+    # otherwise a memory-only answer looks like it had no evidence at all.
+    for key, value in mem.data.items():
+        state.add_source("memory", key, snippet=str(value)[:200])
+
     roster = subagents if subagents is not None else default_subagents()
     tool_list: list = [SubagentTool(subagent=sa, state=state) for sa in roster]
     tool_list.append(RememberProjectTool(memory=mem))
@@ -263,6 +269,29 @@ def _section(title: str, body: list[str]) -> list[str]:
     return [f"\n{title}:", *body]
 
 
+def _dedup_sources(sources: list) -> list[str]:
+    """Render sources, collapsing duplicates by (origin, ref).
+
+    The Researcher reruns ``rag_search`` with rephrased queries, so the same chunk
+    is recorded many times. Keep each distinct source once (with its best score),
+    in first-seen order, so the list stays readable instead of a wall of repeats.
+    """
+    best: dict[tuple, float | None] = {}
+    order: list[tuple] = []
+    for s in sources:
+        key = (s.origin, s.ref)
+        if key not in best:
+            order.append(key)
+            best[key] = s.score
+        elif s.score is not None and (best[key] is None or s.score > best[key]):
+            best[key] = s.score
+    out: list[str] = []
+    for origin, ref in order:
+        score = best[(origin, ref)]
+        out.append(f"  - [{origin}] {ref}" + (f"  (score={score:.2f})" if score is not None else ""))
+    return out
+
+
 def render_state(state: TaskState) -> str:
     """Render the final ``TaskState`` as a human-readable report.
 
@@ -277,12 +306,7 @@ def render_state(state: TaskState) -> str:
     if summary:
         lines.append(f"\nFinal answer:\n{summary}")
 
-    sources = [
-        f"  - [{s.origin}] {s.ref}"
-        + (f"  (score={s.score:.2f})" if s.score is not None else "")
-        for s in state.sources
-    ]
-    lines += _section("Sources consulted", sources)
+    lines += _section("Sources consulted", _dedup_sources(state.sources))
 
     files = [f"  - {f}" for f in state.files_modified]
     lines += _section("Files modified", files)
