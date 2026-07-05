@@ -73,9 +73,12 @@ re-research if the implementer is blocked, re-test after fixes. Each subagent \
 writes its findings to shared state, so pass each one the context it needs \
 (a short summary of prior findings, not the whole history).
 
-When the task is complete and the reviewer approves, stop and give a short summary \
-of what was done and which sources (and their origin: repo / memory / rag / web / \
-inference) informed it."""
+A task is complete either when the reviewer approves a code change, or — for \
+analysis/research requests with no code to change — when you've gathered enough \
+from the subagents to answer the request. Either way, stop and give a full \
+written answer: what you found or did, and which sources (and their origin: \
+repo / memory / rag / web / inference) informed it. Never end your turn with an \
+empty or missing message — your last message must always contain this answer."""
 
 
 @dataclass

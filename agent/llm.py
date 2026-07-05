@@ -19,7 +19,7 @@ from typing import Any
 # reasoning tokens — too low and it returns empty content (TP1 lesson). The model
 # id and the cap's *parameter name* now come from ``providers.chat_config()`` so
 # the backend (OpenAI / Gemini / any OpenAI-compatible endpoint) is env-selectable.
-DEFAULT_MAX_COMPLETION_TOKENS = 4000
+DEFAULT_MAX_COMPLETION_TOKENS = 8000
 
 
 @dataclass

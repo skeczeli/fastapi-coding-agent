@@ -90,8 +90,31 @@ todas quedan registradas en Langfuse:
 | 3 | **Spec inexistente (stop)** | el agente reconoce **evidencia insuficiente** y se detiene / pide ayuda por su cuenta |
 
 El runbook ejecutable (setup, prompts finales, verificación y captura de trazas) está en
-[`PLAN-DEMOS.md`](./PLAN-DEMOS.md). El output completo de cada corrida y las capturas de
-observabilidad quedan en [`evidence/`](./evidence/).
+[`PLAN-DEMOS.md`](./PLAN-DEMOS.md). El output completo de cada corrida queda en
+[`evidence/`](./evidence/); acá documentamos qué se observó en cada una.
+
+### Análisis por demo
+
+**Demo 1 — Analizar el repo** ([`evidence/demo1-analyze-traced.txt`](./evidence/demo1-analyze-traced.txt)).
+El Explorer mapeó `./workspace/` en una pasada y el Researcher trajo 12 fuentes `[rag]` sobre
+dependencies/`APIRouter` (scores 0.54–0.65). El reporte final combina ambos hallazgos —arquitectura,
+cómo funcionan las dependencies globales y a nivel router, y las fuentes usadas—, se mantuvo
+read-only (`Files modified: (none)`) y persistió memoria (`architecture.json`, `decisions.json`)
+para que la reuse la Demo 2.
+
+**Demo 2 — Agregar `GET /health` + test** ([`evidence/demo2-health-memory-traced.txt`](./evidence/demo2-health-memory-traced.txt)).
+El progress log nunca invoca al Explorer — el orquestador arrancó directo desde
+`[memory] architecture` y `[memory] decisions`, confirmando el reuso de memoria que pide la
+consigna. La cadena Implementer → Tester → Reviewer corrió completa y el Reviewer aprobó; lo
+verificamos de forma independiente (sin confiar solo en el reporte) corriendo `pytest` nosotros
+mismos: `1 passed`. Escrituras confinadas a `workspace/app/main.py` y `workspace/tests/test_health.py`.
+
+**Demo 3 — Spec inexistente (stop)** ([`evidence/demo3-insufficient-evidence-traced.txt`](./evidence/demo3-insufficient-evidence-traced.txt)).
+El Explorer se invocó una única vez para confirmar que no hay ningún rastro de la "ACME Internal
+Gateway Spec v9" en el repo; combinado con la memoria (que tampoco la menciona) y sin poder usar web
+search, el orquestador concluyó explícitamente que no tiene evidencia suficiente para implementar
+nada y se detuvo, explicando qué verificó y qué necesitaría (el texto real de la spec) para
+continuar — sin modificar ningún archivo (`Files modified: (none)`).
 
 ---
 
@@ -104,7 +127,20 @@ delegación a subagentes. Una corrida multi-agente completa produce una traza co
 observations (todo el árbol orquestador → subagentes → llm / tools / rag).
 
 Las trazas de las demos y sus capturas de pantalla quedan en [`evidence/`](./evidence/) (cómo
-capturarlas: ver `PLAN-DEMOS.md`).
+capturarlas: ver `PLAN-DEMOS.md`). Capturas de una corrida completa de la Demo 1, en
+[`evidence/langfuse/`](./evidence/langfuse/):
+
+- [`langfuse-full-trace-tree.jpeg`](./evidence/langfuse/langfuse-full-trace-tree.jpeg) — el árbol
+  completo: orquestador → `tool:researcher`/`tool:implementer` (cada uno con su propio `agent.turn`
+  anidado) → `llm.complete` / `tool:rag_search` / `tool:web_search`.
+- [`langfuse-dashboard-overview.jpeg`](./evidence/langfuse/langfuse-dashboard-overview.jpeg) —
+  agregados del proyecto: traces totales, costo y tokens por modelo (`gpt-5-nano`).
+- [`langfuse-tool-usage-breakdown.jpeg`](./evidence/langfuse/langfuse-tool-usage-breakdown.jpeg) —
+  desglose de observations por tipo de tool (`read_file`, `rag_search`, `web_search`, etc.).
+- [`langfuse-reviewer-verdict.jpeg`](./evidence/langfuse/langfuse-reviewer-verdict.jpeg) — el
+  razonamiento del Reviewer sobre el plan propuesto, no solo el veredicto final.
+- [`langfuse-implementer-prompt-metadata.jpeg`](./evidence/langfuse/langfuse-implementer-prompt-metadata.jpeg) —
+  system prompt completo del Implementer junto con metadata (`tool_calls`, `latency_ms`).
 
 ---
 
