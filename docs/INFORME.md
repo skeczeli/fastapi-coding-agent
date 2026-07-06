@@ -79,7 +79,7 @@ sin tocar el código del agente.
 
 ## Demos
 
-El set de demostración consta de tres tareas sobre el caso de uso que, en conjunto, ejercitan las
+El set de demostración consta de cuatro tareas sobre el caso de uso que, en conjunto, ejercitan las
 capacidades que pide la consigna. Se corren en orden (la 2 reusa la memoria que escribe la 1) y
 todas quedan registradas en Langfuse:
 
@@ -88,6 +88,7 @@ todas quedan registradas en Langfuse:
 | 1 | **Analizar el repo** | coordinación Explorer + Researcher, **RAG con fuentes**, diferenciación de origen (repo / RAG / inferencia); persiste memoria |
 | 2 | **Agregar `GET /health` + test** | **reusa la memoria** de la 1, cadena Implementer → Tester → Reviewer, **resultado verificable** (`pytest` pasa) |
 | 3 | **Spec inexistente (stop)** | el agente reconoce **evidencia insuficiente** y se detiene / pide ayuda por su cuenta |
+| 4 | **Fuentes web inalcanzables (loop)** | el harness **detecta un loop sin progreso** y el agente cambia de estrategia / pide ayuda |
 
 El runbook ejecutable (setup, prompts finales, verificación y captura de trazas) está en
 [`PLAN-DEMOS.md`](./PLAN-DEMOS.md). El output completo de cada corrida queda en
@@ -115,6 +116,17 @@ Gateway Spec v9" en el repo; combinado con la memoria (que tampoco la menciona) 
 search, el orquestador concluyó explícitamente que no tiene evidencia suficiente para implementar
 nada y se detuvo, explicando qué verificó y qué necesitaría (el texto real de la spec) para
 continuar — sin modificar ningún archivo (`Files modified: (none)`).
+
+**Demo 4 — Fuentes web inalcanzables (loop)** ([`evidence/demo4-loop-detection-traced.txt`](./evidence/demo4-loop-detection-traced.txt)).
+La tarea pide citar fuentes web recientes que la documentación del RAG no cubre. El Researcher
+respeta el orden RAG-primero (recupera 6 fuentes `[rag]` sobre benchmarks/performance) y después va
+a la web, pero `web_search` no está disponible (sin `TAVILY_API_KEY`) y devuelve el mismo error en
+cada intento. Tras repetir la búsqueda sin obtener nada nuevo, la **detección de loops** del harness
+se dispara sola —`No progress: web_search returned the same result 4 times`— y en vez de seguir
+insistiendo, el agente **cambia de estrategia**: le explica al usuario que no tiene acceso web y le
+ofrece alternativas concretas (habilitar la key, aportar las URLs a mano, o aplazar). Cierra las tres
+conductas que pide la consigna en una sola corrida —detectar la repetición sin progreso, cambiar de
+estrategia y pedir ayuda—, sin modificar ningún archivo (`Files modified: (none)`).
 
 ---
 
