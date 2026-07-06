@@ -75,7 +75,9 @@ def _drive(
     tracer = observability.get_tracer()
 
     # One root span per agent turn; LLM generations and tool spans nest under it.
-    with tracer.span("agent.turn", as_type="agent"):
+    # The last message is this turn's user request — surface it as the trace input.
+    user_input = messages[-1].get("content") if messages else None
+    with tracer.span("agent.turn", as_type="agent", input=user_input):
         for iteration in range(max_iters):
             # Keep the working context small (no-op until #C7). Assign back in place
             # so a summarized history propagates to the caller's persistent list.
