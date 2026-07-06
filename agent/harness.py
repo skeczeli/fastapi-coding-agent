@@ -221,8 +221,9 @@ def converse(
     if mode is None:
         mode = HarnessMode()
 
-    # Default supervision_fn when mode has supervision on
-    if supervision_fn is None and mode and mode.supervision_enabled:
+    # Default supervision_fn — always defined so it's armed when /supervision is
+    # toggled ON mid-session; check_supervision no-ops while the mode is OFF.
+    if supervision_fn is None and mode:
         def supervision_fn(description: str) -> bool:
             output_fn(f"[supervision] {description}")
             try:
