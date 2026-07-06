@@ -21,6 +21,12 @@ from typing import Any
 # the backend (OpenAI / Gemini / any OpenAI-compatible endpoint) is env-selectable.
 DEFAULT_MAX_COMPLETION_TOKENS = 8000
 
+# Retry-on-429 knobs. Free-tier endpoints (Cerebras, Gemini) shed load with
+# transient rate limits; agent loops make many back-to-back calls, so one blip
+# shouldn't kill a whole run. Waits: 2s, 4s, 8s — then the error propagates.
+RATE_LIMIT_RETRIES = 3
+RATE_LIMIT_BASE_WAIT = 2.0
+
 
 @dataclass
 class ToolCall:
@@ -102,6 +108,28 @@ def _mock_response(messages: list[dict], tools: list[dict] | None) -> LLMRespons
     return LLMResponse(content=f"[mock] received: {last}", tool_calls=[], raw=None)
 
 
+def _create_with_retry(client, kwargs: dict[str, Any]):
+    """Call the chat endpoint, retrying transient 429s with exponential backoff.
+
+    Only ``RateLimitError`` is retried (up to ``RATE_LIMIT_RETRIES`` times);
+    every other error propagates immediately. The final attempt re-raises so
+    callers still see the real error when the provider stays saturated.
+    """
+    import time
+
+    from openai import RateLimitError
+
+    for attempt in range(RATE_LIMIT_RETRIES + 1):
+        try:
+            return client.chat.completions.create(**kwargs)
+        except RateLimitError:
+            if attempt == RATE_LIMIT_RETRIES:
+                raise
+            wait = RATE_LIMIT_BASE_WAIT * (2**attempt)
+            print(f"[llm] rate limited (429), retrying in {wait:.0f}s...")
+            time.sleep(wait)
+
+
 def complete(
     messages: list[dict],
     tools: list[dict] | None = None,
@@ -147,7 +175,7 @@ def complete(
     # + latency out. Nests under whatever span the harness opened (the agent turn).
     start = time.perf_counter()
     with tracer.span("llm.complete", as_type="generation", model=model, input=messages):
-        resp = client.chat.completions.create(**kwargs)
+        resp = _create_with_retry(client, kwargs)
         choice = resp.choices[0].message
         calls: list[ToolCall] = []
         for tc in choice.tool_calls or []:
