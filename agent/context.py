@@ -85,6 +85,12 @@ def summarize_history(
     to_discard = non_system[:-keep_last]
     to_keep = non_system[-keep_last:]
 
+    # Never split an assistant(tool_calls) → tool exchange: a kept tool message
+    # whose tool_calls request was discarded is rejected by the API (OpenAI 400:
+    # "role 'tool' must be a response to a preceding message with 'tool_calls'").
+    while to_keep and to_keep[0].get("role") == "tool":
+        to_discard.append(to_keep.pop(0))
+
     overflow = _estimate_tokens(messages) - token_budget
     if overflow > token_budget:
         summary_text = _llm_summary(to_discard)
