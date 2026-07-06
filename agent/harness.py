@@ -277,7 +277,20 @@ def converse(
                 # User modified: replace the user message with new instructions
                 messages[-1] = {"role": "user", "content": plan_result}
 
-        reply = _drive(messages, by_name, schemas, state, max_iters, approval_fn, mode, supervision_fn)
+        # A failed turn (provider outage, rate limit that outlasted the retries)
+        # shouldn't kill the whole session: report it, roll history back to
+        # before this turn (drops the user message and any partial tool
+        # exchanges — an assistant msg with unanswered tool_calls would poison
+        # every later call), and let the user retry.
+        turn_start = len(messages) - 1  # index of this turn's user message
+        try:
+            reply = _drive(
+                messages, by_name, schemas, state, max_iters, approval_fn, mode, supervision_fn
+            )
+        except Exception as err:  # noqa: BLE001 — REPL boundary: report, keep chatting.
+            del messages[turn_start:]
+            output_fn(f"[turn failed] {type(err).__name__}: {err}")
+            continue
         # Keep the assistant's final text in history so follow-ups have context.
         messages.append({"role": "assistant", "content": reply})
         output_fn(reply)
