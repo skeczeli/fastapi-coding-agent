@@ -264,9 +264,54 @@ def run(
     return state
 
 
+def run_interactive(
+    subagents: list[Subagent] | None = None,
+    max_iters: int = 25,
+    memory_path: str = ".agent_memory",
+) -> TaskState:
+    """Run the orchestrator as a persistent chat (the multi-agent REPL).
+
+    Same setup as ``run`` — shared ``TaskState``, project memory, subagents
+    wrapped as tools — but driven by ``harness.converse`` instead of a one-shot
+    ``run_loop``, so the orchestrator's context persists across user turns:
+    follow-ups, corrections, and answers to its ask-for-help questions all land
+    in the same conversation. ``/plan`` and ``/supervision`` toggles work here
+    too (they live in ``converse``).
+
+    One ``TaskState`` spans the whole session, so ``sources`` /
+    ``files_modified`` accumulate across tasks and ``subagent_results`` keeps
+    each subagent's *latest* result. Memory is loaded once up front (injected
+    into the system prompt) and persisted when the session ends.
+
+    Returns:
+        The session's final ``TaskState`` for inspection/reporting.
+    """
+    state = TaskState(request="(interactive session)")
+    mem = ProjectMemory.load(memory_path)
+    for key, value in mem.data.items():
+        state.add_source("memory", key, snippet=str(value)[:200])
+
+    roster = subagents if subagents is not None else default_subagents()
+    tool_list: list = [SubagentTool(subagent=sa, state=state) for sa in roster]
+    tool_list.append(RememberProjectTool(memory=mem))
+
+    try:
+        harness.converse(
+            tool_list,
+            state,
+            system_prompt=ORCHESTRATOR_PROMPT + _memory_preamble(mem),
+            max_iters=max_iters,
+        )
+    finally:
+        # Persist whatever the LLM remembered even if the session dies mid-turn.
+        mem.save(memory_path)
+    return state
+
+
 # --------------------------------------------------------------------------- #
 # CLI entrypoint (#I1) — `python -m agent.agents.orchestrator "<task>"`
 # The multi-agent counterpart to `python -m agent` (single agent).
+# `--interactive` runs it as a persistent chat instead of one-shot.
 # --------------------------------------------------------------------------- #
 
 
@@ -345,7 +390,16 @@ def _build_parser() -> "argparse.ArgumentParser":
         prog="python -m agent.agents.orchestrator",
         description="Run the multi-agent FastAPI coding agent on a task.",
     )
-    parser.add_argument("task", nargs="+", help="The coding task for the agent to perform.")
+    parser.add_argument(
+        "task",
+        nargs="*",
+        help="The coding task for the agent to perform (omit with --interactive).",
+    )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Run as a persistent chat instead of a one-shot task.",
+    )
     parser.add_argument(
         "--max-iters", type=int, default=25, help="Orchestration step cap (default: 25)."
     )
@@ -400,7 +454,12 @@ def main(argv: list[str] | None = None) -> int:
 
     from agent import observability, policy
 
-    args = _build_parser().parse_args(argv)
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if args.interactive and args.task:
+        parser.error("--interactive takes no task argument; give tasks at the prompt")
+    if not args.interactive and not args.task:
+        parser.error("a task is required (or use --interactive)")
     request = " ".join(args.task)
 
     if not os.getenv("AGENT_LLM_MOCK") and not os.getenv("OPENAI_API_KEY"):
@@ -413,7 +472,6 @@ def main(argv: list[str] | None = None) -> int:
     tracer = observability.init_tracer()
     tracing_on = not isinstance(tracer, observability.NoopTracer)
     print(f"Observability: {'Langfuse trace on' if tracing_on else 'off (no LANGFUSE keys)'}")
-    print(f"Task: {request}\n")
 
     # Confirm-before-run for require_approval commands (pip install, git commit, …).
     # Set process-wide so it reaches the subagents' loops (where commands run).
@@ -426,6 +484,24 @@ def main(argv: list[str] | None = None) -> int:
 
     policy.set_approval_fn(approval_fn)
 
+    if args.interactive:
+        roster = default_subagents()
+        print("Multi-agent FastAPI coding agent — interactive. Type 'exit' to quit.")
+        print(f"Subagents: {', '.join(sa.name for sa in roster)}")
+        print("Toggle modes: /plan, /supervision\n")
+        try:
+            state = run_interactive(
+                subagents=roster, max_iters=args.max_iters, memory_path=args.memory_path
+            )
+        except Exception as err:  # noqa: BLE001 — CLI boundary: report, don't crash.
+            return _report_api_error(err)
+        finally:
+            observability.flush()
+        # Session report: everything the run accumulated across turns.
+        print(render_state(state))
+        return 0
+
+    print(f"Task: {request}\n")
     try:
         state = run(request, max_iters=args.max_iters, memory_path=args.memory_path)
     except Exception as err:  # noqa: BLE001 — CLI boundary: report, don't crash.
